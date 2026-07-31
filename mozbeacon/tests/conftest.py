@@ -1,5 +1,18 @@
-# Phase 3 rewires the ported detection package off Treeherder's imports and replaces
-# the test_repository / test_perf_framework / create_push fixtures its tests rely on.
-# Until then the files copied into tests/detection/ still import treeherder.* and
-# cannot be collected. Drop this line as part of that phase.
-collect_ignore = ["detection"]
+import pytest
+
+
+@pytest.fixture
+def mock_bugfiler_settings(monkeypatch):
+    """Bugzilla credentials for the tests that exercise the bug path.
+
+    Both keys are set deliberately: the filer key creates bugs, the commenter key
+    writes see_also and attachments, and a test that only set the first would pass
+    against a service that can't modify anything.
+    """
+    for name, value in (
+        ("BUGFILER_API_URL", "https://bugzilla.mozilla.org"),
+        ("BUGFILER_API_KEY", "test-api-key"),
+        ("COMMENTER_API_KEY", "test-commenter-key"),
+        ("SITE_HOSTNAME", "alerts.telemetry.moz.tools"),
+    ):
+        monkeypatch.setattr(f"mozbeacon.detection.base.bug_manager.settings.{name}", value)

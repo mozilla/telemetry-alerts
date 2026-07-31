@@ -7,7 +7,7 @@ import requests
 import taskcluster
 from django.conf import settings
 
-from treeherder.utils.taskcluster_lib_scopes import satisfies_expression
+from mozbeacon.services.taskcluster_lib_scopes import satisfies_expression
 
 logger = logging.getLogger(__name__)
 

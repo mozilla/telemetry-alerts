@@ -2,7 +2,7 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager import (
+from mozbeacon.detection.email_manager import (
     TelemetryEmail,
     TelemetryEmailContent,
     TelemetryEmailManager,
@@ -13,9 +13,7 @@ from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager impor
 class TestTelemetryEmailManagerIntegration:
     """Integration tests with Taskcluster mocking."""
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_email_manager_initialization_with_taskcluster(self, mock_notify_factory):
         """Test that EmailManager initializes with Taskcluster notify client."""
         mock_client = Mock()
@@ -27,9 +25,7 @@ class TestTelemetryEmailManagerIntegration:
         mock_notify_factory.assert_called_once()
         assert email_manager.notify_client == mock_client
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_full_email_flow_with_taskcluster_mock(
         self, mock_notify_factory, telemetry_alert_obj, mock_probe
     ):
@@ -58,9 +54,7 @@ class TestTelemetryEmailManagerIntegration:
         )
         assert "MozDetect has detected a telemetry change" in email_payload["content"]
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_multiple_emails_sent_to_taskcluster(
         self, mock_notify_factory, mock_probe, telemetry_alert_obj
     ):
@@ -93,9 +87,7 @@ class TestTelemetryEmailManagerIntegration:
         assert "user2@mozilla.com" in recipients
         assert "user3@mozilla.com" in recipients
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_full_email_flow_with_unknown_regression(
         self, mock_notify_factory, alert_with_unknown_regression, mock_probe
     ):
@@ -116,9 +108,7 @@ class TestTelemetryEmailManagerIntegration:
         )
         assert "MozDetect has detected a telemetry change" in email_payload["content"]
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_taskcluster_notify_client_not_called_during_initialization(self, mock_notify_factory):
         """Test that Taskcluster notify client is created during initialization."""
         mock_client = Mock()
@@ -130,9 +120,7 @@ class TestTelemetryEmailManagerIntegration:
         # Verify factory was called
         mock_notify_factory.assert_called_once()
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.base_email_manager.taskcluster.notify_client_factory"
-    )
+    @patch("mozbeacon.detection.base.email_manager.taskcluster.notify_client_factory")
     def test_email_payload_structure(self, mock_notify_factory, telemetry_alert_obj, mock_probe):
         """Test that the email payload has the correct structure for Taskcluster."""
         mock_client = Mock()
@@ -159,7 +147,7 @@ class TestTelemetryEmailManagerIntegration:
 
 
 class TestTelemetryEmailManager:
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager.TelemetryEmail")
+    @patch("mozbeacon.detection.email_manager.TelemetryEmail")
     def test_email_alert_sends_to_all_notification_emails(
         self, mock_telemetry_email_class, mock_probe, telemetry_alert_obj
     ):
@@ -195,7 +183,7 @@ class TestTelemetryEmailManager:
         ]
         mock_email_instance.email.assert_has_calls(expected_calls)
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager.TelemetryEmail")
+    @patch("mozbeacon.detection.email_manager.TelemetryEmail")
     def test_email_alert_with_single_notification_email(
         self, mock_telemetry_email_class, mock_probe, telemetry_alert_obj
     ):

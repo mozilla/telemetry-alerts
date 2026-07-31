@@ -1,5 +1,6 @@
-from treeherder.perf.auto_perf_sheriffing.base_alert_manager import Alert
-from treeherder.perf.models import PerformanceTelemetryAlert
+from mozbeacon.detection.base.alert_manager import Alert
+from mozbeacon.model.models import PerformanceTelemetryAlert
+from mozbeacon.services.push import Push
 
 
 class TelemetryAlertBuildError(Exception):
@@ -56,10 +57,14 @@ class TelemetryAlert(Alert):
         if self.detection_range:
             return self.detection_range
 
+        # The summary carries revision and timestamp denormalized rather than a
+        # foreign key per push, so rebuild the objects the bug and email content
+        # dereference .revision and .time on.
+        summary = self.telemetry_alert_summary
         self.detection_range = {
-            "from": self.telemetry_alert_summary.prev_push,
-            "to": self.telemetry_alert_summary.push,
-            "detection": self.telemetry_alert_summary.original_push,
+            "from": Push(summary.prev_push_revision, summary.prev_push_timestamp),
+            "to": Push(summary.push_revision, summary.push_timestamp),
+            "detection": Push(summary.original_push_revision, summary.original_push_timestamp),
         }
 
         return self.detection_range

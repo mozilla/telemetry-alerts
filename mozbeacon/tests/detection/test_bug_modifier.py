@@ -1,6 +1,6 @@
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_modifier import (
+from mozbeacon.detection.bug_modifier import (
     TelemetryBugModifier,
 )
 
@@ -47,7 +47,7 @@ class TestTelemetryBugModifier:
         create_telemetry_alert,
     ):
         """Test get_bug_modifications with actual modifications from modifiers."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -77,7 +77,7 @@ class TestTelemetryBugModifier:
         self, test_telemetry_alert, test_telemetry_alert_summary, test_telemetry_signature
     ):
         """Test get_bug_modifications with two modifiers updating different fields for the same bug."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -119,7 +119,7 @@ class TestTelemetryBugModifier:
         self, test_telemetry_alert, test_telemetry_alert_summary, test_telemetry_signature, caplog
     ):
         """Test get_bug_modifications with two modifiers trying to update the priority field."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -161,7 +161,7 @@ class TestTelemetryBugModifier:
         self, test_telemetry_alert, test_telemetry_alert_summary, test_telemetry_signature
     ):
         """Test get_bug_modifications with two modifiers both updating the see_also field."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -205,7 +205,7 @@ class TestTelemetryBugModifier:
         self, test_telemetry_alert, test_telemetry_alert_summary, test_telemetry_signature, caplog
     ):
         """Test get_bug_modifications with two modifiers trying to add comments."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -312,7 +312,7 @@ class TestTelemetryBugModifier:
         3. No modifications are returned for None bug numbers
         4. Related alerts without bug numbers don't appear in see_also lists
         """
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlertFactory,
         )
 
@@ -378,7 +378,7 @@ class TestSeeAlsoModifier:
         test_telemetry_signature,
     ):
         """Test modify when alert has no bug number."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -400,7 +400,7 @@ class TestSeeAlsoModifier:
         create_telemetry_alert,
     ):
         """Test modify when alert has a bug but no related alerts have bugs."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -430,7 +430,7 @@ class TestSeeAlsoModifier:
         create_telemetry_alert,
     ):
         """Test modify when alert has one related alert with a bug."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -462,7 +462,7 @@ class TestSeeAlsoModifier:
         create_telemetry_alert,
     ):
         """Test modify when alert has multiple related alerts with bugs."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -497,7 +497,7 @@ class TestSeeAlsoModifier:
         create_telemetry_alert,
     ):
         """Test modify when multiple alerts are passed, each with related bugs."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 
@@ -533,7 +533,7 @@ class TestSeeAlsoModifier:
         create_telemetry_alert,
     ):
         """Test that modify excludes bugs that have already been processed."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+        from mozbeacon.detection.alert import (
             TelemetryAlert,
         )
 

@@ -5,8 +5,8 @@ description = "Telemetry change detection and alerting"
 requires-python = ">=3.13,<3.14"
 
 # Versions are deliberately pinned to whatever Treeherder runs today, so that the
-# shadow run in Phase 7 compares two systems that differ only in the port. Upgrades
-# — mozdetect included — happen after cutover, as their own change with their own diff.
+# shadow run in Phase 7 compares two systems that differ only in the port. Upgrades,
+# including mozdetect, happen after cutover as their own change with their own diff.
 dependencies = [
     "django==6.0.3",
     "django-environ==0.13.0",
@@ -59,10 +59,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-# "treeherder" is first-party in the repository these modules were copied from, and
-# listing it here keeps them byte-identical to their originals rather than reshuffling
-# imports that Phase 3 rewires to mozbeacon.* anyway. Drop it once that lands.
-known-first-party = ["mozbeacon", "treeherder"]
+known-first-party = ["mozbeacon"]
 
 [tool.ruff.format]
 exclude = ["mozbeacon/*/migrations/*"]

@@ -1,28 +1,28 @@
 import logging
 import traceback
 
-from treeherder.perf.auto_perf_sheriffing.base_alert_manager import AlertManager
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+from mozbeacon.detection.alert import (
     TelemetryAlertFactory,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier import (
+from mozbeacon.detection.alert_modifier import (
     TelemetryAlertModifier,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_manager import (
+from mozbeacon.detection.base.alert_manager import AlertManager
+from mozbeacon.detection.bug_manager import (
     TelemetryBugManager,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_modifier import (
+from mozbeacon.detection.bug_modifier import (
     TelemetryBugModifier,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager import (
+from mozbeacon.detection.email_manager import (
     TelemetryEmailManager,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.utils import (
     EMAIL_LIMIT,
     MODIFIABLE_ALERT_FIELDS,
     is_regression,
 )
-from treeherder.perf.models import (
+from mozbeacon.model.models import (
     PerformanceTelemetryAlert,
     PerformanceTelemetryAlertSummary,
 )

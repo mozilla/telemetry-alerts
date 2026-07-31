@@ -6,23 +6,23 @@ from unittest.mock import Mock
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from treeherder.model.models import Push, Repository
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+from mozbeacon.detection.alert import (
     TelemetryAlertFactory,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.email_manager import (
+from mozbeacon.detection.detector import FRAMEWORK, REPOSITORY
+from mozbeacon.detection.email_manager import (
     TelemetryEmailManager,
     TelemetryEmailWriter,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.utils import (
     DEFAULT_ALERT_EMAIL,
 )
-from treeherder.perf.models import (
-    PerformanceFramework,
+from mozbeacon.model.models import (
     PerformanceTelemetryAlert,
     PerformanceTelemetryAlertSummary,
     PerformanceTelemetrySignature,
 )
+from mozbeacon.services.push import PushService
 
 logger = logging.getLogger(__name__)
 
@@ -119,35 +119,20 @@ class Command(BaseCommand):
             raise CommandError(f"Failed to create test alert: {e}") from e
 
     def _create_test_alert(self, options):
-        repo = (
-            Repository.objects.filter(name="mozilla-central").first() or Repository.objects.first()
-        )
-        if not repo:
-            raise CommandError(
-                "No repositories found in the database. Ensure the DB has been populated."
-            )
+        try:
+            pushes = PushService().get_recent_pushes(REPOSITORY, count=2)
+        except Exception as e:
+            raise CommandError(f"Failed to read pushes from the Treeherder API: {e}") from e
 
-        framework = (
-            PerformanceFramework.objects.filter(name="telemetry").first()
-            or PerformanceFramework.objects.first()
-        )
-        if not framework:
-            raise CommandError(
-                "No performance frameworks found in the database. Ensure the DB has been populated."
-            )
-
-        pushes = list(Push.objects.filter(repository=repo).order_by("-time")[:2])
         if len(pushes) < 2:
-            raise CommandError(
-                f"Need at least 2 pushes in repository '{repo.name}' to create a test alert."
-            )
+            raise CommandError(f"Need at least 2 pushes in '{REPOSITORY}' to create a test alert.")
 
-        prev_push, detection_push = pushes[1], pushes[0]
+        detection_push, prev_push = pushes[0], pushes[1]
 
         logger.info(
             f"Creating test alert: probe={options['probe']}, "
             f"label={options['label'] or 'none'}, channel={options['channel']}, "
-            f"platform={options['platform']}, repo={repo.name}"
+            f"platform={options['platform']}, repo={REPOSITORY}"
         )
 
         signature, _ = PerformanceTelemetrySignature.objects.get_or_create(
@@ -160,12 +145,15 @@ class Command(BaseCommand):
         )
 
         summary, _ = PerformanceTelemetryAlertSummary.objects.get_or_create(
-            repository=repo,
-            framework=framework,
-            prev_push=prev_push,
-            push=detection_push,
+            repository=REPOSITORY,
+            framework=FRAMEWORK,
+            prev_push_revision=prev_push.revision,
+            push_revision=detection_push.revision,
             defaults={
-                "original_push": detection_push,
+                "prev_push_timestamp": prev_push.time,
+                "push_timestamp": detection_push.time,
+                "original_push_revision": detection_push.revision,
+                "original_push_timestamp": detection_push.time,
                 "manually_created": False,
                 "created": datetime.now(UTC),
             },

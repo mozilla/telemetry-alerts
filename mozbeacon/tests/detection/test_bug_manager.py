@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 import responses
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_manager import (
+from mozbeacon.detection.bug_manager import (
     TelemetryBugContent,
     TelemetryBugManager,
 )
@@ -312,9 +312,7 @@ class TestTelemetryBugContent:
         self, bug_content, mock_probe, telemetry_alert_obj
     ):
         """Test that _build_probe_alert_row includes GLAM dashboard link."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_manager.get_glam_dashboard_link"
-        ) as mock_link:
+        with patch("mozbeacon.detection.bug_manager.get_glam_dashboard_link") as mock_link:
             mock_link.return_value = "https://glam.telemetry.mozilla.org/test"
 
             result = bug_content._build_probe_alert_row(mock_probe, telemetry_alert_obj)
@@ -377,12 +375,8 @@ class TestTelemetryBugContent:
         # Should include end date + 1 day (next_push date + 1)
         assert "2024-01-17" in description
 
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_manager.get_treeherder_detection_link"
-    )
-    @patch(
-        "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.bug_manager.get_treeherder_detection_range_link"
-    )
+    @patch("mozbeacon.detection.bug_manager.get_treeherder_detection_link")
+    @patch("mozbeacon.detection.bug_manager.get_treeherder_detection_range_link")
     def test_build_bug_content_calls_link_builders(
         self, mock_range_link, mock_detection_link, bug_content, mock_probe, telemetry_alert_obj
     ):

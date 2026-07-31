@@ -3,8 +3,8 @@ Django settings for mozbeacon.
 
 Every setting the ported detection code reads is declared here, using the same names
 it already uses in Treeherder so that Phase 3 stays a straight port. Values that were
-hardcoded in Treeherder — and that the migration exists to make changeable without a
-deploy — are read from the environment instead.
+hardcoded in Treeherder are read from the environment instead, since making them
+changeable without a deploy is part of why this migration exists.
 """
 
 from pathlib import Path
@@ -86,22 +86,31 @@ NOTIFY_ACCESS_TOKEN = env("NOTIFY_ACCESS_TOKEN", default=None)
 PERF_SHERIFF_BOT_CLIENT_ID = env("PERF_SHERIFF_BOT_CLIENT_ID", default=None)
 PERF_SHERIFF_BOT_ACCESS_TOKEN = env("PERF_SHERIFF_BOT_ACCESS_TOKEN", default=None)
 
+# Pushes are read from Treeherder's API. There is no replica of that data here.
+TREEHERDER_API_URL = env("TREEHERDER_API_URL", default="https://treeherder.mozilla.org/api")
+TREEHERDER_API_TIMEOUT = env.int("TREEHERDER_API_TIMEOUT", default=30)
+
+# BigQuery project the telemetry datasets are read through. Set it to an empty value
+# to let the client infer the project from the credentials instead, which is what
+# Treeherder does in production, where it came from GCLOUD_PROJECT.
+BIGQUERY_PROJECT = env("BIGQUERY_PROJECT", default="mozdata") or None
+
 # Detection
 TELEMETRY_ENABLE_ALERTS = env.bool("TELEMETRY_ENABLE_ALERTS", default=True)
 SUPPORTED_PLATFORMS = env.list("SUPPORTED_PLATFORMS", default=["windows", "linux", "osx"])
 
 # Outbound kill switches, independent of detection, so the service can run in shadow
 # mode without duplicating every bug and email that Treeherder is still sending.
-# These gate the decision to file/notify, not the transport — see Phase 3.
+# These gate the decision to file/notify, not the transport. See Phase 3.
 TELEMETRY_ENABLE_BUGS = env.bool("TELEMETRY_ENABLE_BUGS", default=False)
 TELEMETRY_ENABLE_EMAILS = env.bool("TELEMETRY_ENABLE_EMAILS", default=False)
 
 # Taskcluster's notify service rate limit.
 EMAIL_LIMIT = env.int("EMAIL_LIMIT", default=50)
 
-# Hardcoded in Treeherder's telemetry_alerting/utils.py today; the defaults below are
-# its current values. Moved here so that rollout changes — the Android allowlist in
-# particular — don't need a deploy. Note ANDROID_ALERT_EMAIL is not just a fallback:
+# Hardcoded in Treeherder's telemetry_alerting/utils.py today. The defaults below are
+# its current values. Moved here so that rollout changes, the Android allowlist in
+# particular, don't need a deploy. Note ANDROID_ALERT_EMAIL is not just a fallback:
 # it overrides the probe's own notification list for every allowlisted probe.
 DEFAULT_ALERT_EMAIL = env("DEFAULT_ALERT_EMAIL", default="gmierzwinski@mozilla.com")
 ANDROID_ALERT_EMAIL = env("ANDROID_ALERT_EMAIL", default="perf-telemetry-alerts@mozilla.com")

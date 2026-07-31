@@ -1,6 +1,6 @@
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+from mozbeacon.detection.alert import (
     TelemetryAlert,
     TelemetryAlertBuildError,
     TelemetryAlertFactory,

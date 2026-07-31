@@ -1,4 +1,4 @@
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.utils import (
     get_glam_dashboard_link,
     get_treeherder_detection_link,
     get_treeherder_detection_range_link,

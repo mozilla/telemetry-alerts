@@ -1,12 +1,12 @@
-from treeherder.perf.auto_perf_sheriffing.base_email_manager import EmailManager
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.base.email_manager import EmailManager
+from mozbeacon.detection.base.email_writer import EmailWriter
+from mozbeacon.detection.utils import (
     TELEMETRY_ALERT_DASHBOARD_ALERT,
     TELEMETRY_ALERT_DASHBOARD_SUMMARY,
     get_glam_dashboard_link,
     get_treeherder_detection_link,
     get_treeherder_detection_range_link,
 )
-from treeherder.perf.email import EmailWriter
 
 
 class TelemetryEmailManager(EmailManager):

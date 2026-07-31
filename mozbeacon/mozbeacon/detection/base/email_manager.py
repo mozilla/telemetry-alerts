@@ -1,4 +1,4 @@
-from treeherder.services import taskcluster
+from mozbeacon.services import taskcluster
 
 
 class EmailManager:

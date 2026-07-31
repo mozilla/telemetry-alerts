@@ -1,54 +1,43 @@
-import pathlib
-from datetime import datetime
-from unittest.mock import Mock
+from datetime import UTC, datetime
+from unittest.mock import Mock, patch
 
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import TelemetryAlert
-from treeherder.perf.models import (
+from mozbeacon.detection.alert import TelemetryAlert
+from mozbeacon.detection.detector import FRAMEWORK, REPOSITORY
+from mozbeacon.model.models import (
     PerformanceTelemetryAlert,
     PerformanceTelemetryAlertSummary,
     PerformanceTelemetrySignature,
 )
+from mozbeacon.services.push import Push
 
 
-def pytest_collection_modifyitems(config, items):
-    telemetry_path = pathlib.Path(__file__).parent
-    for item in items:
-        if telemetry_path in pathlib.Path(item.fspath).parents or str(item.fspath).startswith(
-            str(telemetry_path)
-        ):
-            item.add_marker(pytest.mark.telemetry_alerting)
+@pytest.fixture(autouse=True)
+def stub_bigquery_credentials():
+    """Detection resolves Application Default Credentials before it queries anything.
 
-
-@pytest.fixture
-def detection_push(create_push, test_repository):
-    return create_push(
-        test_repository,
-        revision="abcdef123456",
-        author="test@mozilla.com",
-        time=datetime(2024, 1, 15, 12, 0, 0),
-    )
+    Stubbed for the whole suite so tests never depend on whether the developer happens
+    to have a gcloud login, and never wait on the GCE metadata server when there is
+    none. The tests that cover the check itself patch over this.
+    """
+    with patch("google.auth.default", return_value=(Mock(), "test-project")):
+        yield
 
 
 @pytest.fixture
-def prev_push(create_push, test_repository):
-    return create_push(
-        test_repository,
-        revision="prev123456",
-        author="test@mozilla.com",
-        time=datetime(2024, 1, 14, 12, 0, 0),
-    )
+def detection_push():
+    return Push(revision="abcdef123456", time=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC))
 
 
 @pytest.fixture
-def next_push(create_push, test_repository):
-    return create_push(
-        test_repository,
-        revision="next123456",
-        author="test@mozilla.com",
-        time=datetime(2024, 1, 16, 12, 0, 0),
-    )
+def prev_push():
+    return Push(revision="prev123456", time=datetime(2024, 1, 14, 12, 0, 0, tzinfo=UTC))
+
+
+@pytest.fixture
+def next_push():
+    return Push(revision="next123456", time=datetime(2024, 1, 16, 12, 0, 0, tzinfo=UTC))
 
 
 @pytest.fixture
@@ -63,18 +52,19 @@ def test_telemetry_signature(db):
 
 
 @pytest.fixture
-def test_telemetry_alert_summary(
-    test_repository, test_perf_framework, detection_push, prev_push, next_push, test_issue_tracker
-):
+def test_telemetry_alert_summary(db, detection_push, prev_push, next_push):
     return PerformanceTelemetryAlertSummary.objects.create(
-        repository=test_repository,
-        framework=test_perf_framework,
-        prev_push=prev_push,
-        push=next_push,
-        original_push=detection_push,
+        repository=REPOSITORY,
+        framework=FRAMEWORK,
+        prev_push_revision=prev_push.revision,
+        prev_push_timestamp=prev_push.time,
+        push_revision=next_push.revision,
+        push_timestamp=next_push.time,
+        original_push_revision=detection_push.revision,
+        original_push_timestamp=detection_push.time,
         manually_created=False,
-        created=datetime(2024, 1, 16, 13, 0, 0),
-        issue_tracker=test_issue_tracker,
+        # Discarded by auto_now_add, exactly as it is in the detector.
+        created=datetime(2024, 1, 16, 13, 0, 0, tzinfo=UTC),
     )
 
 
@@ -147,7 +137,7 @@ def metric_info_with_alert(base_metric_info):
 @pytest.fixture
 def alert_without_bug(test_telemetry_alert_summary, test_telemetry_signature):
     """Create a TelemetryAlert object without a bug number."""
-    from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+    from mozbeacon.detection.alert import (
         TelemetryAlertFactory,
     )
 
@@ -177,7 +167,7 @@ def alert_without_bug(test_telemetry_alert_summary, test_telemetry_signature):
 @pytest.fixture
 def alert_with_bug(test_telemetry_alert_summary, test_telemetry_signature):
     """Create a TelemetryAlert object with a bug number."""
-    from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+    from mozbeacon.detection.alert import (
         TelemetryAlertFactory,
     )
 
@@ -211,7 +201,7 @@ def alert_with_unknown_regression(test_telemetry_alert_summary, test_telemetry_s
     This mirrors what Sherlock._is_regression returns when a probe's
     lower_is_better setting is unset, so the direction can't be determined.
     """
-    from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+    from mozbeacon.detection.alert import (
         TelemetryAlertFactory,
     )
 

@@ -18,7 +18,7 @@ WORKDIR /app
 # or uv.lock change. --frozen is the load-bearing flag: it fails rather than
 # re-resolving, so an image can never be built from a lock that doesn't match
 # pyproject.toml. There is no second `uv sync` after the source copy because the
-# project is not a package (see [tool.uv] in pyproject.toml) — nothing to install.
+# project is not a package (see [tool.uv] in pyproject.toml), so nothing to install.
 COPY mozbeacon/pyproject.toml mozbeacon/uv.lock mozbeacon/.python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
@@ -45,7 +45,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
 WORKDIR /app
 
 COPY deploy/ /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint-*.sh
+RUN chmod +x /usr/local/bin/*.sh
+
+# Runs before every command so that a mounted service account key is picked up whether
+# the container is serving, running the nightly job, or running a one-off manage.py.
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 
 # Deployed image: API service, worker Job and migration Job all run from this.

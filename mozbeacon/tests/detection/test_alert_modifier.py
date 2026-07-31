@@ -3,10 +3,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier import (
+from mozbeacon.detection.alert_modifier import (
     TelemetryAlertModifier,
 )
-from treeherder.perf.models import PerformanceTelemetryAlert
+from mozbeacon.model.models import PerformanceTelemetryAlert
 
 
 class TestTelemetryAlertModifier:
@@ -32,7 +32,7 @@ class TestTelemetryAlertModifier:
         # ResolutionModifier should be registered (check by class name since decorator makes it None)
         assert any(u.__name__ == "ResolutionModifier" for u in updaters)
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_get_alert_updates_empty(self, mock_bug_searcher_class):
         """Test get_alert_updates when updaters return no updates."""
         # Mock BugSearcher to return no bugs
@@ -47,7 +47,7 @@ class TestTelemetryAlertModifier:
         assert updates == {}
         assert alerts_dict == {}
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_get_alert_updates_with_data(self, mock_bug_searcher_class, test_telemetry_alert):
         """Test get_alert_updates with actual updates from updaters."""
         # Mock BugSearcher to return bugs with resolutions
@@ -69,7 +69,7 @@ class TestTelemetryAlertModifier:
         assert str(test_telemetry_alert.id) in alerts_dict
 
     @patch(
-        "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.MODIFIABLE_ALERT_FIELDS",
+        "mozbeacon.detection.alert_modifier.MODIFIABLE_ALERT_FIELDS",
         ("status", "test_field"),
     )
     def test_get_alert_updates_with_two_modifiers_different_fields(self, test_telemetry_alert):
@@ -208,7 +208,7 @@ class TestResolutionModifier:
                 return updater
         pytest.fail("ResolutionModifier not found in updaters list")
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_no_bugs(self, mock_bug_searcher_class, resolution_modifier_class):
         """Test update_alerts when no bugs are found."""
         mock_searcher = Mock()
@@ -221,7 +221,7 @@ class TestResolutionModifier:
         assert updates == {}
         assert alerts == {}
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_with_fixed_bug(
         self, mock_bug_searcher_class, resolution_modifier_class, test_telemetry_alert
     ):
@@ -241,7 +241,7 @@ class TestResolutionModifier:
         assert updates[str(test_telemetry_alert.id)]["status"] == PerformanceTelemetryAlert.FIXED
         assert str(test_telemetry_alert.id) in alerts
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_with_multiple_bugs(
         self,
         mock_bug_searcher_class,
@@ -277,7 +277,7 @@ class TestResolutionModifier:
         assert str(test_telemetry_alert.id) in alerts_dict
         assert str(alert2.id) in alerts_dict
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_bug_not_matching_alert(
         self, mock_bug_searcher_class, resolution_modifier_class, test_telemetry_alert
     ):
@@ -296,7 +296,7 @@ class TestResolutionModifier:
         assert updates == {}
         assert alerts == {}
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_unknown_resolution(
         self, mock_bug_searcher_class, resolution_modifier_class, test_telemetry_alert
     ):
@@ -315,7 +315,7 @@ class TestResolutionModifier:
         assert updates == {}
         assert alerts == {}
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_exception_handling(
         self, mock_bug_searcher_class, resolution_modifier_class, caplog
     ):
@@ -332,7 +332,7 @@ class TestResolutionModifier:
         assert "Failed to get bugs for alert resolution updates" in caplog.text
         assert "API Error" in caplog.text
 
-    @patch("treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_modifier.BugSearcher")
+    @patch("mozbeacon.detection.alert_modifier.BugSearcher")
     def test_update_alerts_sets_correct_query(
         self, mock_bug_searcher_class, resolution_modifier_class
     ):

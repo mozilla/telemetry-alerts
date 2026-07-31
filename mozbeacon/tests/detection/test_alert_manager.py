@@ -3,13 +3,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+from mozbeacon.detection.alert import (
     TelemetryAlertFactory,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager import (
+from mozbeacon.detection.alert_manager import (
     TelemetryAlertManager,
 )
-from treeherder.perf.models import PerformanceTelemetryAlert
+from mozbeacon.model.models import PerformanceTelemetryAlert
 
 
 @pytest.fixture
@@ -49,12 +49,8 @@ def mock_email_manager():
 def telemetry_alert_manager(mock_probes_dict):
     """TelemetryAlertManager instance with mocked dependencies."""
     with (
-        patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryBugManager"
-        ) as mock_bug_mgr,
-        patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryEmailManager"
-        ) as mock_email_mgr,
+        patch("mozbeacon.detection.alert_manager.TelemetryBugManager") as mock_bug_mgr,
+        patch("mozbeacon.detection.alert_manager.TelemetryEmailManager") as mock_email_mgr,
     ):
         mock_bug_mgr.return_value = Mock()
         mock_email_mgr.return_value = Mock()
@@ -72,12 +68,8 @@ class TestTelemetryAlertManager:
     def test_initialization(self, mock_probes_dict):
         """Test TelemetryAlertManager initialization."""
         with (
-            patch(
-                "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryBugManager"
-            ) as mock_bug_mgr,
-            patch(
-                "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryEmailManager"
-            ) as mock_email_mgr,
+            patch("mozbeacon.detection.alert_manager.TelemetryBugManager") as mock_bug_mgr,
+            patch("mozbeacon.detection.alert_manager.TelemetryEmailManager") as mock_email_mgr,
         ):
             mock_bug_mgr.return_value = Mock()
             mock_email_mgr.return_value = Mock()
@@ -108,9 +100,7 @@ class TestTelemetryAlertManager:
 
     def test_update_alerts_no_updates(self, telemetry_alert_manager, alert_without_bug):
         """Test update_alerts when there are no updates."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             telemetry_alert_manager.update_alerts([alert_without_bug])
@@ -119,9 +109,7 @@ class TestTelemetryAlertManager:
 
     def test_update_alerts_with_updates(self, telemetry_alert_manager, alert_without_bug, caplog):
         """Test update_alerts when there are updates to apply."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             alert_id = str(alert_without_bug.telemetry_alert.id)
             mock_modifier.get_alert_updates.return_value = (
                 {alert_id: {"status": 1}},
@@ -144,9 +132,7 @@ class TestTelemetryAlertManager:
         self, telemetry_alert_manager, alert_without_bug, caplog
     ):
         """Test update_alerts ignores fields not in MODIFIABLE_ALERT_FIELDS."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             alert_id = str(alert_without_bug.telemetry_alert.id)
             mock_modifier.get_alert_updates.return_value = (
                 {
@@ -511,8 +497,7 @@ class TestTelemetryAlertManager:
         alert_row = create_telemetry_alert(signature, bug_number=123456, bug_modified=False)
 
         with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager."
-            "TelemetryAlertManager.modify_alert_bugs"
+            "mozbeacon.detection.alert_manager.TelemetryAlertManager.modify_alert_bugs"
         ) as mock_modify:
             telemetry_alert_manager._redo_bug_modifications()
 
@@ -606,9 +591,7 @@ class TestTelemetryAlertManager:
             alert_row = create_telemetry_alert(signature)
             alerts.append(TelemetryAlertFactory.construct_alert(alert_row))
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             alert_updates = {
                 str(alerts[0].telemetry_alert.id): {"status": 1},
                 str(alerts[1].telemetry_alert.id): {"status": 2},
@@ -642,9 +625,7 @@ class TestTelemetryAlertManager:
         mock_probe.should_email.return_value = False
         telemetry_alert_manager.bug_manager.file_bug.return_value = {"id": 999888}
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             # Run the full manage_alerts workflow
@@ -667,9 +648,7 @@ class TestTelemetryAlertManager:
 
         telemetry_alert_manager.bug_manager.file_bug.return_value = {"id": 111222}
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.side_effect = Exception("Update error")
 
             with caplog.at_level(logging.INFO):
@@ -694,9 +673,7 @@ class TestTelemetryAlertManager:
         # Make file_bug fail
         telemetry_alert_manager.bug_manager.file_bug.side_effect = Exception("Bugzilla error")
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             with caplog.at_level(logging.INFO):
@@ -718,9 +695,7 @@ class TestTelemetryAlertManager:
         # Make email_alert fail
         telemetry_alert_manager.email_manager.email_alert.side_effect = Exception("Email error")
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             with caplog.at_level(logging.INFO):  # Changed to INFO to capture house keeping log
@@ -754,9 +729,7 @@ class TestTelemetryAlertManager:
 
         telemetry_alert_manager.bug_manager.file_bug.side_effect = file_bug_side_effect
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             # Create a spy on modify_alert_bugs to verify which alerts are passed
@@ -818,8 +791,7 @@ class TestTelemetryAlertManager:
 
         # Mock modify_alert_bugs to check if we call it with only alerts that have bugs
         with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager."
-            "TelemetryAlertManager.modify_alert_bugs"
+            "mozbeacon.detection.alert_manager.TelemetryAlertManager.modify_alert_bugs"
         ) as mock_modify_alert_bugs:
             with caplog.at_level(logging.INFO):
                 telemetry_alert_manager._redo_bug_modifications()
@@ -871,9 +843,7 @@ class TestTelemetryAlertManager:
 
         telemetry_alert_manager.bug_manager.file_bug.return_value = {"id": 333444}
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager.TelemetryAlertModifier"
-        ) as mock_modifier:
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as mock_modifier:
             mock_modifier.get_alert_updates.return_value = ({}, {})
 
             telemetry_alert_manager.manage_alerts([alert1, alert2])
@@ -897,7 +867,7 @@ class TestEmailLimiting:
 
     def test_emails_left_never_negative(self, telemetry_alert_manager):
         """Test emails_left() returns 0 when limit exceeded, never negative."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 
@@ -912,7 +882,7 @@ class TestEmailLimiting:
         self, telemetry_alert_manager, alert_without_bug, mock_probe
     ):
         """Test _email_alert returns early when email limit is reached."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 
@@ -936,7 +906,7 @@ class TestEmailLimiting:
         self, telemetry_alert_manager, alert_without_bug, mock_probe
     ):
         """Test _email_alert works when exactly one email remains."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 
@@ -963,7 +933,7 @@ class TestEmailLimiting:
         self, create_telemetry_signature, create_telemetry_alert, telemetry_alert_manager
     ):
         """Test that email limit prevents emails after limit is reached across multiple alerts."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 
@@ -1041,7 +1011,7 @@ class TestEmailLimiting:
         self, create_telemetry_signature, create_telemetry_alert, telemetry_alert_manager
     ):
         """Test _redo_email_alerts respects the email limit."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 
@@ -1071,7 +1041,7 @@ class TestEmailLimiting:
         self, telemetry_alert_manager, alert_without_bug, mock_probe
     ):
         """Test email limiting at exactly zero emails left."""
-        from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+        from mozbeacon.detection.utils import (
             EMAIL_LIMIT,
         )
 

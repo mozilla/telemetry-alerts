@@ -3,7 +3,7 @@ import traceback
 
 import requests
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.utils import (
     DEFAULT_ALERT_EMAIL,
     DEFAULT_BUGZILLA_INFO,
     DEFAULT_CHANGE_DETECTION,

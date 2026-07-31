@@ -29,18 +29,26 @@ services:
     environment:
       DEBUG: "1"
       LOG_LEVEL: DEBUG
-      # Inside the compose network postgres is still on its own 5432; the 5433 mapping
+      # Inside the compose network postgres is still on its own 5432. The 5433 mapping
       # above is only for the host.
       DATABASE_URL: psql://mozbeacon:mozbeacon@postgres:5432/telemetry_alerts
       # Outbound stays off locally. Nothing here should ever reach Bugzilla or email.
       TELEMETRY_ENABLE_BUGS: "0"
       TELEMETRY_ENABLE_EMAILS: "0"
+      BIGQUERY_PROJECT: mozdata
+      # Where the BigQuery client looks for Application Default Credentials
+      CLOUDSDK_CONFIG: /gcloud
     volumes:
       # Live-editable source. The virtualenv lives at /opt/venv precisely so that this
       # mount can't shadow it.
       - ./mozbeacon:/app
       # Keep a host-side `uv sync` venv out of the container.
       - /app/.venv
+      # Local BigQuery credentials. Set GCLOUD_DIR=~/.config/gcloud in .env after a
+      # `gcloud auth application-default login`
+      - ${GCLOUD_DIR:-.}:/gcloud:ro
+      # Used for production bigquery authentication
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-.}:/bq-credentials/credentials.json:ro
     ports:
       - "8000:8000"
 

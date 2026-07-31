@@ -7,11 +7,12 @@ against, and which phase each piece belongs to.
 | Path | What it is |
 | :--- | :--- |
 | `mozbeacon/` | The Python service. Django project, `DJANGO_SETTINGS_MODULE=mozbeacon.config.settings` |
-| `mozbeacon/mozbeacon/model/` | The three tables — signature, alert summary, alert |
-| `mozbeacon/mozbeacon/detection/` | The ported detection package. Still imports `treeherder.*`; Phase 3 rewires it |
+| `mozbeacon/mozbeacon/model/` | The three tables: signature, alert summary, alert |
+| `mozbeacon/mozbeacon/detection/` | The ported detection package: detector, alert manager, bug and email writers |
+| `mozbeacon/mozbeacon/services/` | Pushes (Treeherder API) and Taskcluster notify |
 | `mozbeacon/mozbeacon/api/` | DRF read API (Phase 6) |
 | `ui/` | The alert dashboard |
-| `deploy/` | Cloud Run entrypoints — one image, three of them |
+| `deploy/` | Cloud Run entrypoints. One image, three of them |
 
 ## Local development
 
@@ -54,8 +55,8 @@ postgres` is still the quickest way to get a database.
 ## Tests
 
 `pytest` is configured in `mozbeacon/pyproject.toml` and collects from
-`mozbeacon/tests/`. `tests/detection/` is the set of files copied over from Treeherder
-and is skipped by `tests/conftest.py` until Phase 3 rewires their imports.
+`mozbeacon/tests/`. No network or BigQuery access is needed. `tests/detection/` fakes
+the `mozdetect` module through `sys.modules` and stubs the HTTP calls with `responses`.
 
 ## Configuration
 
@@ -67,10 +68,71 @@ defaults in `mozbeacon/mozbeacon/config/settings.py`. The ones that matter:
 | `DATABASE_URL` | `psql://mozbeacon:mozbeacon@localhost:5433/telemetry_alerts` | |
 | `TELEMETRY_ENABLE_BUGS` | `False` | Outbound kill switch. Off means no bug is filed or modified |
 | `TELEMETRY_ENABLE_EMAILS` | `False` | Outbound kill switch. Off means no email is sent |
-| `BUG_FILER_API_KEY` | — | Creates bugs |
-| `BUG_COMMENTER_API_KEY` | — | Writes `see_also` and attachments. Both keys are required |
-| `NOTIFY_CLIENT_ID` / `NOTIFY_ACCESS_TOKEN` | — | Taskcluster notify |
+| `BUG_FILER_API_KEY` | none | Creates bugs |
+| `BUG_COMMENTER_API_KEY` | none | Writes `see_also` and attachments. Both keys are required |
+| `NOTIFY_CLIENT_ID` / `NOTIFY_ACCESS_TOKEN` | none | Taskcluster notify |
 | `ANDROID_PROBE_ALLOWLIST` | the six probes hardcoded in Treeherder today | Comma-separated |
+| `BIGQUERY_PROJECT` | `mozdata` | Project the telemetry datasets are read through |
+| `TREEHERDER_API_URL` | `https://treeherder.mozilla.org/api` | Pushes are read from here |
+
+### BigQuery credentials for local detection
+
+Detection reads telemetry from BigQuery, which needs Application Default Credentials.
+Deployment and local development authenticate differently, but both arrive as
+Application Default Credentials, so the detector checks once at the start of a run and
+fails immediately with a message naming both mechanisms if neither produced any.
+
+Locally, use a gcloud login:
+
+```bash
+gcloud auth application-default login
+docker compose run --rm backend python manage.py test_alert --probe <probe> --max-detections 1
+```
+
+That needs a `.env` at the repository root, which docker compose reads automatically.
+It is gitignored, so create your own:
+
+```bash
+# BigQuery credentials for local detection runs. Point this at your gcloud config
+# directory after running `gcloud auth application-default login`. The directory is
+# mounted read-only at /gcloud in the backend container, and CLOUDSDK_CONFIG points
+# the BigQuery client at it.
+GCLOUD_DIR=~/.config/gcloud
+
+# A service account key on the host, to exercise the deployed credential path locally
+# instead of a gcloud login. Compose mounts it where the image entrypoint expects it.
+#GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+
+# BigQuery project the telemetry datasets are read through. Leave as mozdata locally.
+#BIGQUERY_PROJECT=mozdata
+
+# Outbound. Both default to off. Turning either on locally sends real bugs and email.
+#TELEMETRY_ENABLE_BUGS=0
+#TELEMETRY_ENABLE_EMAILS=0
+```
+
+`GCLOUD_DIR` is mounted read-only at `/gcloud` and `CLOUDSDK_CONFIG` points the client
+at it, so it resolves the same whichever user the container runs as. `test_alert` rolls
+back its database writes unless you pass `--keep`, and files no bugs or email while the
+two kill switches are off.
+
+In deployment, mount a service account key instead. The image entrypoint exports
+`GOOGLE_APPLICATION_CREDENTIALS` when it finds a key at `BQ_CREDENTIALS_PATH`
+(default `/bq-credentials/credentials.json`), so on Cloud Run the whole setup is a
+secret file mount:
+
+```
+--set-secrets=/bq-credentials/credentials.json=bigquery-sa-key:latest
+```
+
+An already-set `GOOGLE_APPLICATION_CREDENTIALS` always wins, so pointing it at another
+path works too. To exercise this path locally rather than a gcloud login, set
+`GOOGLE_APPLICATION_CREDENTIALS` in `.env` to the key's path on the host and compose
+mounts it where the entrypoint expects it.
+
+Set `BIGQUERY_PROJECT` to the project that should be billed for the queries, or to an
+empty value to let the client infer it from the credentials, which is what Treeherder
+does in production.
 
 Both kill switches default to off, so nothing in a local or shadow run can reach
 Bugzilla or email without being turned on deliberately.
@@ -87,5 +149,5 @@ docker build -f mozbeacon/Dockerfile --target runtime -t mozbeacon:dev .
 `deploy/entrypoint-api.sh` (Cloud Run service), `deploy/entrypoint-worker.sh` (nightly
 Job) and `deploy/entrypoint-migrate.sh` (migration Job, never on service startup).
 
-A `justfile` replaces the commands above once the command surface stops moving —
-Phase 9, deliberately after cutover.
+A `justfile` replaces the commands above once the command surface stops moving. That
+is Phase 9, deliberately after cutover.

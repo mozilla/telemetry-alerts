@@ -1,11 +1,11 @@
 import logging
 from datetime import timedelta
 
-from treeherder.perf.auto_perf_sheriffing.bug_searcher import BugSearcher
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.base.bug_searcher import BugSearcher
+from mozbeacon.detection.utils import (
     MODIFIABLE_ALERT_FIELDS,
 )
-from treeherder.perf.models import PerformanceTelemetryAlert
+from mozbeacon.model.models import PerformanceTelemetryAlert
 
 logger = logging.getLogger(__name__)
 

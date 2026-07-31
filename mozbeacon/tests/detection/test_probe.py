@@ -2,11 +2,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe import (
+from mozbeacon.detection.probe import (
     TelemetryProbe,
     TelemetryProbeValidationError,
 )
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.utils import (
     DEFAULT_BUGZILLA_INFO,
     DEFAULT_CHANGE_DETECTION,
 )
@@ -291,9 +291,7 @@ class TestTelemetryProbeNotificationEmails:
         self, metric_info_with_bool_true, mock_response_data, expected_emails
     ):
         """Test notification emails retrieved from network request."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = mock_response_data
             mock_response.raise_for_status = Mock()
@@ -310,9 +308,7 @@ class TestTelemetryProbeNotificationEmails:
         """Test default notification email when network request fails."""
         probe = TelemetryProbe(metric_info_with_bool_true)
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             emails = probe.get_notification_emails()
@@ -322,9 +318,7 @@ class TestTelemetryProbeNotificationEmails:
         """Test custom default notification email when network request fails."""
         probe = TelemetryProbe(metric_info_with_bool_true)
 
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             emails = probe.get_notification_emails(default="custom@default.com")
@@ -373,9 +367,7 @@ class TestTelemetryProbeValidationError:
 class TestTelemetryProbeInfo:
     def test_time_unit_returns_empty_when_no_probe_info(self, metric_info_with_alert):
         """Test time_unit returns empty string when probe info fails to be fetched."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             probe = TelemetryProbe(metric_info_with_alert)
@@ -384,9 +376,7 @@ class TestTelemetryProbeInfo:
 
     def test_time_unit_returns_value_from_probe_info(self, metric_info_with_bool_true):
         """Test time_unit returns value from fetched probe info."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "notification_emails": ["test@mozilla.com"],
@@ -402,9 +392,7 @@ class TestTelemetryProbeInfo:
 
     def test_time_unit_returns_empty_when_not_in_probe_info(self, metric_info_with_bool_true):
         """Test time_unit returns empty string when not in probe info."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "notification_emails": ["test@mozilla.com"],
@@ -419,9 +407,7 @@ class TestTelemetryProbeInfo:
 
     def test_fetch_probe_info_caches_result(self, metric_info_with_bool_true):
         """Test fetch_probe_info only makes one network request."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "notification_emails": ["test@mozilla.com"],
@@ -439,9 +425,7 @@ class TestTelemetryProbeInfo:
 
     def test_fetch_probe_info_handles_network_error(self, metric_info_with_bool_true):
         """Test fetch_probe_info handles network errors gracefully."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             probe = TelemetryProbe(metric_info_with_bool_true)
@@ -454,9 +438,7 @@ class TestTelemetryProbeInfo:
 class TestTelemetryProbeBugzillaInfo:
     def test_get_bugzilla_info_returns_default_on_network_failure(self, metric_info_with_bool_true):
         """Test get_bugzilla_info returns the default when probe info cannot be fetched."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             probe = TelemetryProbe(metric_info_with_bool_true)
@@ -468,9 +450,7 @@ class TestTelemetryProbeBugzillaInfo:
         self, metric_info_with_bool_true
     ):
         """Test get_bugzilla_info returns the custom default when provided."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_get.side_effect = Exception("Network error")
 
             probe = TelemetryProbe(metric_info_with_bool_true)
@@ -481,9 +461,7 @@ class TestTelemetryProbeBugzillaInfo:
 
     def test_get_bugzilla_info_parsed_from_bugzilla_tag(self, metric_info_with_bool_true):
         """Test get_bugzilla_info parses product and component from a matching tag."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "tags": [
@@ -502,9 +480,7 @@ class TestTelemetryProbeBugzillaInfo:
         self, metric_info_with_bool_true
     ):
         """Test get_bugzilla_info returns default when no tag has 'bugzilla' in its description."""
-        with patch(
-            "treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe.requests.get"
-        ) as mock_get:
+        with patch("mozbeacon.detection.probe.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "tags": [

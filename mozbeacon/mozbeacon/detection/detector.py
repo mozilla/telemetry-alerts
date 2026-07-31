@@ -1,34 +1,27 @@
+"""Telemetry change detection.
+
+The body of this module is Treeherder's Sherlock.telemetry_alert() and its helpers,
+ported over unchanged apart from what the move forces: pushes come from Treeherder's
+API rather than a local table, and the repository and framework are constants rather
+than rows.
+
+Sherlock's other half, perf alert backfilling, stayed in Treeherder, which is why
+this is Detector rather than Sherlock.
+"""
+
 import logging
-import os
 import traceback
-from datetime import UTC, datetime, time, timedelta
-from json import JSONDecodeError, loads
-from logging import INFO, WARNING
+from datetime import UTC, datetime, timedelta
+from json import loads
 
 import requests
 from django.conf import settings
-from django.db.models import QuerySet
-from taskcluster.helper import TaskclusterConfig
+from django.core.exceptions import ImproperlyConfigured
 
-from treeherder.perf.auto_perf_sheriffing.backfill_reports import (
-    BackfillReportMaintainer,
-)
-from treeherder.perf.auto_perf_sheriffing.backfill_tool import BackfillTool
-from treeherder.perf.auto_perf_sheriffing.performance_alerting.alert_manager import (
-    PerformanceAlertManager,
-)
-from treeherder.perf.auto_perf_sheriffing.secretary import Secretary
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
-    TelemetryAlertFactory,
-)
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager import (
-    TelemetryAlertManager,
-)
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe import (
-    TelemetryProbe,
-    TelemetryProbeValidationError,
-)
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.alert import TelemetryAlertFactory
+from mozbeacon.detection.alert_manager import TelemetryAlertManager
+from mozbeacon.detection.probe import TelemetryProbe, TelemetryProbeValidationError
+from mozbeacon.detection.utils import (
     ANDROID_ALERT_EMAIL,
     ANDROID_PROBE_ALLOWLIST,
     DEFAULT_ALERT_EMAIL,
@@ -36,278 +29,30 @@ from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
     MOBILE,
     is_regression,
 )
-from treeherder.perf.exceptions import CannotBackfillError, MaxRuntimeExceededError
-from treeherder.perf.models import (
-    BackfillNotificationRecord,
-    BackfillRecord,
-    BackfillReport,
-    PerformanceDatum,
-    PerformanceFramework,
+from mozbeacon.model.models import (
     PerformanceTelemetryAlert,
     PerformanceTelemetryAlertSummary,
     PerformanceTelemetrySignature,
-    Push,
-    Repository,
 )
+from mozbeacon.services.push import PushService
 
 logger = logging.getLogger(__name__)
 
-CLIENT_ID = settings.PERF_SHERIFF_BOT_CLIENT_ID
-ACCESS_TOKEN = settings.PERF_SHERIFF_BOT_ACCESS_TOKEN
-
 BUILDID_MAPPING = "https://hg.mozilla.org/mozilla-central/json-firefoxreleases"
+BIGQUERY_SCOPE = "https://www.googleapis.com/auth/bigquery"
+
+# Were Repository and PerformanceFramework rows in Treeherder. Neither table exists
+# here, and the framework is only ever "telemetry".
+REPOSITORY = "mozilla-central"
+FRAMEWORK = "telemetry"
 
 
-class Sherlock:
-    """
-    Robot variant of a performance sheriff (the main class)
+class Detector:
+    """Runs telemetry change detection and turns the detections into alerts."""
 
-    Automates backfilling of skipped perf jobs.
-    """
-
-    DEFAULT_MAX_RUNTIME = timedelta(minutes=50)
-
-    def __init__(
-        self,
-        report_maintainer: BackfillReportMaintainer,
-        backfill_tool: BackfillTool,
-        secretary: Secretary,
-        max_runtime: timedelta = None,
-        supported_platforms: list[str] = None,
-    ):
-        self.report_maintainer = report_maintainer
-        self.backfill_tool = backfill_tool
-        self.secretary = secretary
-        self._max_runtime = self.DEFAULT_MAX_RUNTIME if max_runtime is None else max_runtime
-
-        self.supported_platforms = supported_platforms or settings.SUPPORTED_PLATFORMS
-        self._wake_up_time = datetime.now()
+    def __init__(self, push_service: PushService = None):
+        self.push_service = push_service or PushService()
         self._buildid_mappings = {}
-
-    def sheriff(self, since: datetime, frameworks: list[str], repositories: list[str]):
-        logger.info("Sherlock: Validating settings...")
-        self.secretary.validate_settings()
-
-        logger.info("Sherlock: Marking reports for backfill...")
-        self.secretary.mark_reports_for_backfill()
-        self.assert_can_run()
-
-        # secretary checks the status of all backfilled jobs
-        self.secretary.check_outcome()
-        self.assert_can_run()
-
-        # reporter tool should always run *(only handles preliminary records/reports)*
-        logger.info("Sherlock: Reporter tool is creating/maintaining reports...")
-        self._report(since, frameworks, repositories)
-        self.assert_can_run()
-
-        # backfill tool follows
-        logger.info("Sherlock: Starting to backfill...")
-        self._backfill(frameworks, repositories)
-        self.assert_can_run()
-
-        logger.info("Sherlock: Syncing performance alert summary statuses...")
-        self._sync_performance_alert_summary_status()
-
-    def runtime_exceeded(self) -> bool:
-        elapsed_runtime = datetime.now() - self._wake_up_time
-        return self._max_runtime <= elapsed_runtime
-
-    def assert_can_run(self):
-        if self.runtime_exceeded():
-            raise MaxRuntimeExceededError("Sherlock: Max runtime exceeded.")
-
-    def _report(
-        self, since: datetime, frameworks: list[str], repositories: list[str]
-    ) -> list[BackfillReport]:
-        return self.report_maintainer.provide_updated_reports(since, frameworks, repositories)
-
-    def _backfill(self, frameworks: list[str], repositories: list[str]):
-        for platform in self.supported_platforms:
-            self.__backfill_on(platform, frameworks, repositories)
-
-    def __backfill_on(self, platform: str, frameworks: list[str], repositories: list[str]):
-        left = self.secretary.backfills_left(on_platform=platform)
-        total_consumed = 0
-
-        records_to_backfill = self.__fetch_records_requiring_backfills_on(
-            platform, frameworks, repositories
-        )
-        logger.info(
-            f"Sherlock: {records_to_backfill.count()} records found to backfill on {platform.title()}, {left} backfills remaining."
-        )
-
-        for record in records_to_backfill:
-            if left <= 0 or self.runtime_exceeded():
-                logger.info(
-                    f"Sherlock: Max runtime exceeded. Stopping backfill on {platform.title()}."
-                )
-                break
-            left, consumed = self._backfill_record(record, left)
-            logger.info(f"Sherlock: Processed backfill record [alert_id={record.alert.id}].")
-            # Model used for reporting backfill outcome
-            BackfillNotificationRecord.objects.get_or_create(record=record)
-            total_consumed += consumed
-
-        self.secretary.consume_backfills(platform, total_consumed)
-        logger.info(
-            f"Sherlock: Consumed {total_consumed} backfills, {left} remaining on {platform.title()}."
-        )
-
-    @staticmethod
-    def __fetch_records_requiring_backfills_on(
-        platform: str, frameworks: list[str], repositories: list[str]
-    ) -> QuerySet:
-        records_to_backfill = BackfillRecord.objects.select_related(
-            "alert",
-            "alert__series_signature",
-            "alert__series_signature__platform",
-            "alert__summary__framework",
-            "alert__summary__repository",
-        ).filter(
-            status=BackfillRecord.READY_FOR_PROCESSING,
-            alert__series_signature__platform__platform__icontains=platform,
-            alert__summary__framework__name__in=frameworks,
-            alert__summary__repository__name__in=repositories,
-        )
-        return records_to_backfill
-
-    def _backfill_record(self, record: BackfillRecord, left: int) -> tuple[int, int]:
-        consumed = 0
-
-        if record.last_detected_push_id is None:
-            # Legacy record
-            try:
-                context = record.get_context()
-            except JSONDecodeError:
-                logger.warning(
-                    f"Failed to backfill [alert_id={record.alert.id}]: invalid JSON context."
-                )
-                record.status = BackfillRecord.FAILED
-                record.save()
-            else:
-                data_points_to_backfill = self.__get_data_points_to_backfill_from_context(context)
-        else:
-            data_points_to_backfill = self.__get_data_points_to_backfill(record)
-
-        if not data_points_to_backfill:
-            logger.warning(f"No data points found to backfill [alert_id={record.alert.id}].")
-            record.status = BackfillRecord.FAILED
-            record.save()
-            return left, consumed
-
-        task_ids = {}
-        for data_point in data_points_to_backfill:
-            if left <= 0 or self.runtime_exceeded():
-                break
-            try:
-                if isinstance(data_point, dict):
-                    using_job_id = data_point["job_id"]
-                else:
-                    using_job_id = data_point.job_id
-                if not using_job_id:
-                    logger.warning(
-                        f"Failed to backfill [alert_id={record.alert.id}]: invalid job id."
-                    )
-                    continue
-                task_id = self.backfill_tool.backfill_job(using_job_id, alert_id=record.alert.id)
-                task_ids[using_job_id] = task_id
-                left, consumed = left - 1, consumed + 1
-            except (KeyError, CannotBackfillError, Exception) as ex:
-                logger.warning(f"Failed to backfill [alert_id={record.alert.id}]: {ex}")
-            else:
-                record.try_remembering_job_properties(using_job_id)
-
-        success, outcome = self._note_backfill_outcome(
-            record, len(data_points_to_backfill), consumed, task_ids
-        )
-        log_level = INFO if success else WARNING
-        logger.log(log_level, f"{outcome} [alert_id={record.alert.id}]")
-
-        return left, consumed
-
-    @staticmethod
-    def _note_backfill_outcome(
-        record: BackfillRecord, to_backfill: int, actually_backfilled: int, task_ids: dict[str, str]
-    ) -> tuple[bool, str]:
-        success = False
-
-        record.total_actions_triggered = actually_backfilled
-        record.iteration_count += 1
-        now = datetime.now(UTC).isoformat()
-        log_entry = {
-            "status": "backfill_requested",
-            "iteration": record.iteration_count,
-            "job_task_ids": task_ids,
-            "backfill_requested_at": now,
-            "timestamp": now,
-        }
-        record.append_to_backfill_logs(log_entry)
-
-        if actually_backfilled == to_backfill:
-            record.status = BackfillRecord.BACKFILLED
-            success = True
-            outcome = "Backfilled all data points"
-        else:
-            record.status = BackfillRecord.FAILED
-            if actually_backfilled == 0:
-                outcome = "Backfill attempts on all data points failed right upon request."
-            elif actually_backfilled < to_backfill:
-                outcome = "Backfill attempts on some data points failed right upon request."
-            else:
-                raise ValueError(
-                    f"Cannot have backfilled more than available attempts ({actually_backfilled} out of {to_backfill})."
-                )
-
-        record.set_log_details({"action": "BACKFILL", "outcome": outcome})
-        record.save()
-        return success, outcome
-
-    @staticmethod
-    def _is_queue_overloaded(provisioner_id: str, worker_type: str, acceptable_limit=100) -> bool:
-        """
-        Helper method for Sherlock to check load on processing queue.
-        Usage example: _queue_is_too_loaded('gecko-3', 'b-linux')
-        :return: True/False
-        """
-        tc = TaskclusterConfig("https://firefox-ci-tc.services.mozilla.com")
-        tc.auth(client_id=CLIENT_ID, access_token=ACCESS_TOKEN)
-        queue = tc.get_service("queue")
-
-        pending_tasks_count = queue.pendingTasks(provisioner_id, worker_type).get("pendingTasks")
-
-        return pending_tasks_count > acceptable_limit
-
-    @staticmethod
-    def __get_data_points_to_backfill_from_context(context: list[dict]) -> list[dict]:
-        context_len = len(context)
-        start = None
-
-        if context_len == 1:
-            start = 0
-        elif context_len > 1:
-            start = 1
-
-        return context[start:]
-
-    @staticmethod
-    def __get_data_points_to_backfill(record: BackfillRecord) -> list[PerformanceDatum]:
-        signature = record.alert.series_signature
-        repository = signature.repository
-        data_point = (
-            PerformanceDatum.objects.filter(
-                repository=repository,
-                signature=signature,
-                push_id=record.last_detected_push_id,
-            )
-            .order_by("push_timestamp")
-            .first()
-        )
-        return [data_point] if data_point else []
-
-    def _sync_performance_alert_summary_status(self):
-        alert_manager = PerformanceAlertManager()
-        alert_manager.manage_alerts([])
 
     def telemetry_alert(
         self,
@@ -332,8 +77,6 @@ class Sherlock:
             definition doesn't enable change detection. Used for locally testing
             probes that aren't monitored yet.
         """
-        if not self._can_run_telemetry():
-            return
         if not settings.TELEMETRY_ENABLE_ALERTS:
             logger.info("Telemetry alerting is disabled. Enable it with TELEMETRY_ENABLE_ALERTS=1")
             return
@@ -341,16 +84,10 @@ class Sherlock:
         import mozdetect
         from mozdetect.telemetry_query import get_metric_table
 
-        if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and self._is_prod():
-            raise Exception(
-                "GOOGLE_APPLICATION_CREDENTIALS must be defined in production. "
-                "Use GCLOUD_DIR for local testing."
-            )
+        self._assert_bigquery_credentials()
 
-        project = "mozdata"
-        if self._is_prod():
-            # Defined from the GCLOUD_PROJECT env variable
-            project = None
+        # None lets the BigQuery client infer the project from the credentials.
+        project = settings.BIGQUERY_PROJECT
 
         ts_detectors = mozdetect.get_timeseries_detectors()
 
@@ -358,8 +95,6 @@ class Sherlock:
 
         probes = {}
         alerts = []
-        repository = Repository.objects.get(name="mozilla-central")
-        framework = PerformanceFramework.objects.get(name="telemetry")
         for metric_info in metric_definitions:
             if probe_filter and metric_info.get("name") != probe_filter:
                 continue
@@ -463,7 +198,7 @@ class Sherlock:
                             if not self._buildid_mappings:
                                 self._make_buildid_to_date_mapping()
                             alert = self._create_detection_alert(
-                                detection, probe, platform, repository, framework, probe_signature
+                                detection, probe, platform, probe_signature
                             )
                             if alert:
                                 alerts.append(alert)
@@ -473,6 +208,31 @@ class Sherlock:
         if alerts:
             alert_manager = TelemetryAlertManager(probes)
             alert_manager.manage_alerts(alerts)
+
+    def _assert_bigquery_credentials(self):
+        """Fail the run up front when BigQuery credentials can't be resolved.
+
+        Worth doing explicitly, because the per-probe loop below swallows every
+        exception and logs it at info. Without this, missing credentials produce a run
+        that exits successfully, creates nothing, and reports no error anywhere.
+
+        Deployment and local development authenticate differently. Deployment mounts
+        a service account key and points GOOGLE_APPLICATION_CREDENTIALS at it, while
+        local runs use a gcloud login. Both arrive here as Application Default
+        Credentials, so one check covers both.
+        """
+        import google.auth
+        from google.auth.exceptions import GoogleAuthError
+
+        try:
+            google.auth.default(scopes=[BIGQUERY_SCOPE])
+        except GoogleAuthError as e:
+            raise ImproperlyConfigured(
+                "No BigQuery credentials could be resolved. In deployment, mount the "
+                "service account key and point GOOGLE_APPLICATION_CREDENTIALS at it. "
+                "Locally, run `gcloud auth application-default login` and set GCLOUD_DIR "
+                f"so the config directory reaches the container. ({e})"
+            ) from e
 
     def _get_probe_labels(self, probe, platform, project, label_filter=None):
         """Get the labels of a probe that need to be analyzed.
@@ -508,19 +268,11 @@ class Sherlock:
 
         return labels
 
-    def _is_prod(self):
-        return settings.SITE_HOSTNAME == "treeherder.mozilla.org"
-
-    def _can_run_telemetry(self):
-        return not self._is_prod() or (time(22, 0) <= datetime.utcnow().time() < time(23, 0))
-
     def _create_detection_alert(
         self,
         detection: object,
         probe: TelemetryProbe,
         platform: str,
-        repository: Repository,
-        framework: PerformanceFramework,
         probe_signature: PerformanceTelemetrySignature,
     ):
         detection_date = str(detection.location)
@@ -533,22 +285,22 @@ class Sherlock:
         next_build = self._buildid_mappings[platform][detection_build["next_build"]]
 
         # Get the pushes for these builds
-        detection_push = Push.objects.get(
-            revision=detection_build["node"], repository__name=repository.name
-        )
-        prev_push = Push.objects.get(revision=prev_build["node"], repository__name=repository.name)
-        next_push = Push.objects.get(revision=next_build["node"], repository__name=repository.name)
+        detection_push = self.push_service.get_push(REPOSITORY, detection_build["node"])
+        prev_push = self.push_service.get_push(REPOSITORY, prev_build["node"])
+        next_push = self.push_service.get_push(REPOSITORY, next_build["node"])
 
-        # Check that an alert summary doesn't already exist around this point (+/- 1 day)
+        # Check that an alert summary doesn't already exist around this point (+/- 1 day).
+        # The push timestamp is denormalized onto the summary, so this stays a plain
+        # filter rather than the join it used to be.
         latest_timestamp = next_push.time + timedelta(days=1)
         oldest_timestamp = next_push.time - timedelta(days=1)
         try:
             detection_summary = PerformanceTelemetryAlertSummary.objects.filter(
-                repository=repository,
-                framework=framework,
-                push__time__gte=oldest_timestamp,
-                push__time__lte=latest_timestamp,
-            ).latest("push__time")
+                repository=REPOSITORY,
+                framework=FRAMEWORK,
+                push_timestamp__gte=oldest_timestamp,
+                push_timestamp__lte=latest_timestamp,
+            ).latest("push_timestamp")
         except PerformanceTelemetryAlertSummary.DoesNotExist:
             detection_summary = None
 
@@ -556,13 +308,16 @@ class Sherlock:
             # Create an alert summary to capture all alerts
             # that occurred on the same date range
             detection_summary, _ = PerformanceTelemetryAlertSummary.objects.get_or_create(
-                repository=repository,
-                framework=framework,
-                prev_push=prev_push,
-                push=next_push,
-                original_push=detection_push,
+                repository=REPOSITORY,
+                framework=FRAMEWORK,
+                prev_push_revision=prev_push.revision,
+                push_revision=next_push.revision,
                 sheriffed=False,
                 defaults={
+                    "prev_push_timestamp": prev_push.time,
+                    "push_timestamp": next_push.time,
+                    "original_push_revision": detection_push.revision,
+                    "original_push_timestamp": detection_push.time,
                     "manually_created": False,
                     "created": datetime.now(UTC),
                 },

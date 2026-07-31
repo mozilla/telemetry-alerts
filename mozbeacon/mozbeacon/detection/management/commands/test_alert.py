@@ -2,13 +2,12 @@ import logging
 import sys
 import traceback
 from contextlib import contextmanager
-from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from treeherder.perf.auto_perf_sheriffing.factories import sherlock_factory
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.detector import Detector
+from mozbeacon.detection.utils import (
     DEFAULT_ALERT_EMAIL,
     DESKTOP,
     MOBILE,
@@ -58,12 +57,6 @@ class Command(BaseCommand):
             help="Maximum number of detections to turn into alerts (default: 1).",
         )
         parser.add_argument(
-            "--days-to-lookup",
-            type=int,
-            default=1,
-            help="Days back the sherlock instance should look up (default: 1).",
-        )
-        parser.add_argument(
             "--keep",
             action="store_true",
             help="Keep the created DB objects (default: roll back after the run).",
@@ -71,11 +64,11 @@ class Command(BaseCommand):
 
     @contextmanager
     def _readable_logging(self):
-        """Temporarily route the `treeherder` logger through a plain console
+        """Temporarily route the `mozbeacon` logger through a plain console
         handler so this command's output is human-readable instead of the
         GCP-structured JSON used in production.
         """
-        logger = logging.getLogger("treeherder")
+        logger = logging.getLogger("mozbeacon")
         original_handlers = logger.handlers
         original_propagate = logger.propagate
 
@@ -104,10 +97,10 @@ class Command(BaseCommand):
             f"with max_detections={max_detections}, force_monitor={force_monitor}"
         )
 
-        sherlock = sherlock_factory(timedelta(days=options["days_to_lookup"]))
+        detector = Detector()
         try:
             with self._readable_logging(), transaction.atomic():
-                sherlock.telemetry_alert(
+                detector.telemetry_alert(
                     probe_filter=probe,
                     max_detections=max_detections,
                     platform_filter=platform_type,

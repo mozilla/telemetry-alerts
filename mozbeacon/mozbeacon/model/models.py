@@ -1,9 +1,9 @@
 """
-Telemetry alerting schema — Phase 2a.
+Telemetry alerting schema for Phase 2a.
 
 Ported from Treeherder's treeherder/perf/models.py. The three models below were
 PerformanceTelemetrySignature, PerformanceTelemetryAlertSummary and
-PerformanceTelemetryAlert; the latter two inherited from PerformanceAlertSummaryBase
+PerformanceTelemetryAlert. The latter two inherited from PerformanceAlertSummaryBase
 and PerformanceAlertBase, which are flattened here since there is nothing else in
 this service to share them with.
 
@@ -111,7 +111,7 @@ class PerformanceTelemetryAlertSummary(models.Model):
     prev_push_revision = models.CharField(max_length=40)
     prev_push_timestamp = models.DateTimeField()
     push_revision = models.CharField(max_length=40)
-    # Indexed because the dedup query now filters on it directly; it used to ride the
+    # Indexed because the dedup query now filters on it directly. It used to ride the
     # index on Push.time.
     push_timestamp = models.DateTimeField(db_index=True)
     original_push_revision = models.CharField(max_length=40, null=True, default=None)
@@ -125,7 +125,7 @@ class PerformanceTelemetryAlertSummary(models.Model):
     assignee_email = models.CharField(max_length=254, null=True, blank=True)  # 2b: drop
     sheriffed = models.BooleanField(default=True)  # 2b: drop
 
-    # auto_now_add discards any value passed to create(); see the Phase 5 load.
+    # auto_now_add discards any value passed to create(). See the Phase 5 load.
     created = models.DateTimeField(auto_now_add=True, db_index=True)
     triage_due_date = models.DateTimeField(null=True, default=None)  # 2b: drop
     first_triaged = models.DateTimeField(null=True, default=None)  # 2b: drop
@@ -133,7 +133,7 @@ class PerformanceTelemetryAlertSummary(models.Model):
 
     # 2b: drop the summary status concept entirely, and roll it up in the API serializer
     # from the child alerts instead. Nothing writes this today, so every row is
-    # UNTRIAGED; the members are carried over unchanged only so migrated values parse.
+    # UNTRIAGED. The members are carried over unchanged only so migrated values parse.
     UNTRIAGED = 0
     DOWNSTREAM = 1
     REASSIGNED = 2
@@ -215,7 +215,7 @@ class PerformanceTelemetryAlert(models.Model):
     classifier_email = models.CharField(max_length=254, null=True, blank=True)  # 2b: drop
     sheriffed = models.BooleanField(default=True)  # 2b: drop
 
-    # auto_now_add discards any value passed to create(); see the Phase 5 load.
+    # auto_now_add discards any value passed to create(). See the Phase 5 load.
     created = models.DateTimeField(auto_now_add=True, null=True)
     first_triaged = models.DateTimeField(null=True, default=None)  # 2b: drop
     last_updated = models.DateTimeField(auto_now=True, null=True)  # 2b: drop

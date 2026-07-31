@@ -1,8 +1,8 @@
 import logging
 from datetime import timedelta
 
-from treeherder.perf.auto_perf_sheriffing.base_bug_manager import BugManager
-from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+from mozbeacon.detection.base.bug_manager import BugManager
+from mozbeacon.detection.utils import (
     PUSH_LOG,
     TELEMETRY_ALERT_DASHBOARD,
     get_glam_dashboard_link,
