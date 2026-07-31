@@ -1,0 +1,707 @@
+import logging
+import os
+import traceback
+from datetime import UTC, datetime, time, timedelta
+from json import JSONDecodeError, loads
+from logging import INFO, WARNING
+
+import requests
+from django.conf import settings
+from django.db.models import QuerySet
+from taskcluster.helper import TaskclusterConfig
+
+from treeherder.perf.auto_perf_sheriffing.backfill_reports import (
+    BackfillReportMaintainer,
+)
+from treeherder.perf.auto_perf_sheriffing.backfill_tool import BackfillTool
+from treeherder.perf.auto_perf_sheriffing.performance_alerting.alert_manager import (
+    PerformanceAlertManager,
+)
+from treeherder.perf.auto_perf_sheriffing.secretary import Secretary
+from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert import (
+    TelemetryAlertFactory,
+)
+from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.alert_manager import (
+    TelemetryAlertManager,
+)
+from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.probe import (
+    TelemetryProbe,
+    TelemetryProbeValidationError,
+)
+from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+    ANDROID_ALERT_EMAIL,
+    ANDROID_PROBE_ALLOWLIST,
+    DEFAULT_ALERT_EMAIL,
+    DESKTOP,
+    MOBILE,
+    is_regression,
+)
+from treeherder.perf.exceptions import CannotBackfillError, MaxRuntimeExceededError
+from treeherder.perf.models import (
+    BackfillNotificationRecord,
+    BackfillRecord,
+    BackfillReport,
+    PerformanceDatum,
+    PerformanceFramework,
+    PerformanceTelemetryAlert,
+    PerformanceTelemetryAlertSummary,
+    PerformanceTelemetrySignature,
+    Push,
+    Repository,
+)
+
+logger = logging.getLogger(__name__)
+
+CLIENT_ID = settings.PERF_SHERIFF_BOT_CLIENT_ID
+ACCESS_TOKEN = settings.PERF_SHERIFF_BOT_ACCESS_TOKEN
+
+BUILDID_MAPPING = "https://hg.mozilla.org/mozilla-central/json-firefoxreleases"
+
+
+class Sherlock:
+    """
+    Robot variant of a performance sheriff (the main class)
+
+    Automates backfilling of skipped perf jobs.
+    """
+
+    DEFAULT_MAX_RUNTIME = timedelta(minutes=50)
+
+    def __init__(
+        self,
+        report_maintainer: BackfillReportMaintainer,
+        backfill_tool: BackfillTool,
+        secretary: Secretary,
+        max_runtime: timedelta = None,
+        supported_platforms: list[str] = None,
+    ):
+        self.report_maintainer = report_maintainer
+        self.backfill_tool = backfill_tool
+        self.secretary = secretary
+        self._max_runtime = self.DEFAULT_MAX_RUNTIME if max_runtime is None else max_runtime
+
+        self.supported_platforms = supported_platforms or settings.SUPPORTED_PLATFORMS
+        self._wake_up_time = datetime.now()
+        self._buildid_mappings = {}
+
+    def sheriff(self, since: datetime, frameworks: list[str], repositories: list[str]):
+        logger.info("Sherlock: Validating settings...")
+        self.secretary.validate_settings()
+
+        logger.info("Sherlock: Marking reports for backfill...")
+        self.secretary.mark_reports_for_backfill()
+        self.assert_can_run()
+
+        # secretary checks the status of all backfilled jobs
+        self.secretary.check_outcome()
+        self.assert_can_run()
+
+        # reporter tool should always run *(only handles preliminary records/reports)*
+        logger.info("Sherlock: Reporter tool is creating/maintaining reports...")
+        self._report(since, frameworks, repositories)
+        self.assert_can_run()
+
+        # backfill tool follows
+        logger.info("Sherlock: Starting to backfill...")
+        self._backfill(frameworks, repositories)
+        self.assert_can_run()
+
+        logger.info("Sherlock: Syncing performance alert summary statuses...")
+        self._sync_performance_alert_summary_status()
+
+    def runtime_exceeded(self) -> bool:
+        elapsed_runtime = datetime.now() - self._wake_up_time
+        return self._max_runtime <= elapsed_runtime
+
+    def assert_can_run(self):
+        if self.runtime_exceeded():
+            raise MaxRuntimeExceededError("Sherlock: Max runtime exceeded.")
+
+    def _report(
+        self, since: datetime, frameworks: list[str], repositories: list[str]
+    ) -> list[BackfillReport]:
+        return self.report_maintainer.provide_updated_reports(since, frameworks, repositories)
+
+    def _backfill(self, frameworks: list[str], repositories: list[str]):
+        for platform in self.supported_platforms:
+            self.__backfill_on(platform, frameworks, repositories)
+
+    def __backfill_on(self, platform: str, frameworks: list[str], repositories: list[str]):
+        left = self.secretary.backfills_left(on_platform=platform)
+        total_consumed = 0
+
+        records_to_backfill = self.__fetch_records_requiring_backfills_on(
+            platform, frameworks, repositories
+        )
+        logger.info(
+            f"Sherlock: {records_to_backfill.count()} records found to backfill on {platform.title()}, {left} backfills remaining."
+        )
+
+        for record in records_to_backfill:
+            if left <= 0 or self.runtime_exceeded():
+                logger.info(
+                    f"Sherlock: Max runtime exceeded. Stopping backfill on {platform.title()}."
+                )
+                break
+            left, consumed = self._backfill_record(record, left)
+            logger.info(f"Sherlock: Processed backfill record [alert_id={record.alert.id}].")
+            # Model used for reporting backfill outcome
+            BackfillNotificationRecord.objects.get_or_create(record=record)
+            total_consumed += consumed
+
+        self.secretary.consume_backfills(platform, total_consumed)
+        logger.info(
+            f"Sherlock: Consumed {total_consumed} backfills, {left} remaining on {platform.title()}."
+        )
+
+    @staticmethod
+    def __fetch_records_requiring_backfills_on(
+        platform: str, frameworks: list[str], repositories: list[str]
+    ) -> QuerySet:
+        records_to_backfill = BackfillRecord.objects.select_related(
+            "alert",
+            "alert__series_signature",
+            "alert__series_signature__platform",
+            "alert__summary__framework",
+            "alert__summary__repository",
+        ).filter(
+            status=BackfillRecord.READY_FOR_PROCESSING,
+            alert__series_signature__platform__platform__icontains=platform,
+            alert__summary__framework__name__in=frameworks,
+            alert__summary__repository__name__in=repositories,
+        )
+        return records_to_backfill
+
+    def _backfill_record(self, record: BackfillRecord, left: int) -> tuple[int, int]:
+        consumed = 0
+
+        if record.last_detected_push_id is None:
+            # Legacy record
+            try:
+                context = record.get_context()
+            except JSONDecodeError:
+                logger.warning(
+                    f"Failed to backfill [alert_id={record.alert.id}]: invalid JSON context."
+                )
+                record.status = BackfillRecord.FAILED
+                record.save()
+            else:
+                data_points_to_backfill = self.__get_data_points_to_backfill_from_context(context)
+        else:
+            data_points_to_backfill = self.__get_data_points_to_backfill(record)
+
+        if not data_points_to_backfill:
+            logger.warning(f"No data points found to backfill [alert_id={record.alert.id}].")
+            record.status = BackfillRecord.FAILED
+            record.save()
+            return left, consumed
+
+        task_ids = {}
+        for data_point in data_points_to_backfill:
+            if left <= 0 or self.runtime_exceeded():
+                break
+            try:
+                if isinstance(data_point, dict):
+                    using_job_id = data_point["job_id"]
+                else:
+                    using_job_id = data_point.job_id
+                if not using_job_id:
+                    logger.warning(
+                        f"Failed to backfill [alert_id={record.alert.id}]: invalid job id."
+                    )
+                    continue
+                task_id = self.backfill_tool.backfill_job(using_job_id, alert_id=record.alert.id)
+                task_ids[using_job_id] = task_id
+                left, consumed = left - 1, consumed + 1
+            except (KeyError, CannotBackfillError, Exception) as ex:
+                logger.warning(f"Failed to backfill [alert_id={record.alert.id}]: {ex}")
+            else:
+                record.try_remembering_job_properties(using_job_id)
+
+        success, outcome = self._note_backfill_outcome(
+            record, len(data_points_to_backfill), consumed, task_ids
+        )
+        log_level = INFO if success else WARNING
+        logger.log(log_level, f"{outcome} [alert_id={record.alert.id}]")
+
+        return left, consumed
+
+    @staticmethod
+    def _note_backfill_outcome(
+        record: BackfillRecord, to_backfill: int, actually_backfilled: int, task_ids: dict[str, str]
+    ) -> tuple[bool, str]:
+        success = False
+
+        record.total_actions_triggered = actually_backfilled
+        record.iteration_count += 1
+        now = datetime.now(UTC).isoformat()
+        log_entry = {
+            "status": "backfill_requested",
+            "iteration": record.iteration_count,
+            "job_task_ids": task_ids,
+            "backfill_requested_at": now,
+            "timestamp": now,
+        }
+        record.append_to_backfill_logs(log_entry)
+
+        if actually_backfilled == to_backfill:
+            record.status = BackfillRecord.BACKFILLED
+            success = True
+            outcome = "Backfilled all data points"
+        else:
+            record.status = BackfillRecord.FAILED
+            if actually_backfilled == 0:
+                outcome = "Backfill attempts on all data points failed right upon request."
+            elif actually_backfilled < to_backfill:
+                outcome = "Backfill attempts on some data points failed right upon request."
+            else:
+                raise ValueError(
+                    f"Cannot have backfilled more than available attempts ({actually_backfilled} out of {to_backfill})."
+                )
+
+        record.set_log_details({"action": "BACKFILL", "outcome": outcome})
+        record.save()
+        return success, outcome
+
+    @staticmethod
+    def _is_queue_overloaded(provisioner_id: str, worker_type: str, acceptable_limit=100) -> bool:
+        """
+        Helper method for Sherlock to check load on processing queue.
+        Usage example: _queue_is_too_loaded('gecko-3', 'b-linux')
+        :return: True/False
+        """
+        tc = TaskclusterConfig("https://firefox-ci-tc.services.mozilla.com")
+        tc.auth(client_id=CLIENT_ID, access_token=ACCESS_TOKEN)
+        queue = tc.get_service("queue")
+
+        pending_tasks_count = queue.pendingTasks(provisioner_id, worker_type).get("pendingTasks")
+
+        return pending_tasks_count > acceptable_limit
+
+    @staticmethod
+    def __get_data_points_to_backfill_from_context(context: list[dict]) -> list[dict]:
+        context_len = len(context)
+        start = None
+
+        if context_len == 1:
+            start = 0
+        elif context_len > 1:
+            start = 1
+
+        return context[start:]
+
+    @staticmethod
+    def __get_data_points_to_backfill(record: BackfillRecord) -> list[PerformanceDatum]:
+        signature = record.alert.series_signature
+        repository = signature.repository
+        data_point = (
+            PerformanceDatum.objects.filter(
+                repository=repository,
+                signature=signature,
+                push_id=record.last_detected_push_id,
+            )
+            .order_by("push_timestamp")
+            .first()
+        )
+        return [data_point] if data_point else []
+
+    def _sync_performance_alert_summary_status(self):
+        alert_manager = PerformanceAlertManager()
+        alert_manager.manage_alerts([])
+
+    def telemetry_alert(
+        self,
+        probe_filter=None,
+        max_detections=None,
+        platform_filter=None,
+        label_filter=None,
+        force_monitor=False,
+    ):
+        """Run telemetry change detection and alert management.
+
+        :param probe_filter: If set, only the probe with this name is processed.
+            Useful for locally testing a single probe.
+        :param max_detections: If set, at most this many detections per platform
+            are turned into alerts. Set to 1 to exercise the alert manager with a
+            single detection.
+        :param platform_filter: If set to DESKTOP or MOBILE, only probes for that
+            platform type are processed.
+        :param label_filter: If set, only this label of a labeled probe is
+            processed. Ignored for probes that aren't labeled.
+        :param force_monitor: If True, probes are monitored even when their
+            definition doesn't enable change detection. Used for locally testing
+            probes that aren't monitored yet.
+        """
+        if not self._can_run_telemetry():
+            return
+        if not settings.TELEMETRY_ENABLE_ALERTS:
+            logger.info("Telemetry alerting is disabled. Enable it with TELEMETRY_ENABLE_ALERTS=1")
+            return
+
+        import mozdetect
+        from mozdetect.telemetry_query import get_metric_table
+
+        if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and self._is_prod():
+            raise Exception(
+                "GOOGLE_APPLICATION_CREDENTIALS must be defined in production. "
+                "Use GCLOUD_DIR for local testing."
+            )
+
+        project = "mozdata"
+        if self._is_prod():
+            # Defined from the GCLOUD_PROJECT env variable
+            project = None
+
+        ts_detectors = mozdetect.get_timeseries_detectors()
+
+        metric_definitions = self._get_metric_definitions()
+
+        probes = {}
+        alerts = []
+        repository = Repository.objects.get(name="mozilla-central")
+        framework = PerformanceFramework.objects.get(name="telemetry")
+        for metric_info in metric_definitions:
+            if probe_filter and metric_info.get("name") != probe_filter:
+                continue
+
+            if platform_filter and metric_info.get("platform") != platform_filter:
+                continue
+
+            try:
+                probe = TelemetryProbe(metric_info)
+            except TelemetryProbeValidationError as e:
+                logger.warning(f"Failed probe validation: {str(e)}")
+                continue
+
+            # Force some android probes to be monitored if they aren't already
+            if probe.is_mobile and probe.name in ANDROID_PROBE_ALLOWLIST:
+                probe.monitor_info = {
+                    "lower_is_better": True,
+                    "detect_changes": True,
+                    "alert": False,
+                    "notification_emails": [ANDROID_ALERT_EMAIL],
+                }
+
+            if force_monitor:
+                # Monitor the probe regardless of what its definition says. Only
+                # emails are produced, and they are always routed to the default
+                # alert email rather than the probe owners.
+                probe.monitor_info = {
+                    "lower_is_better": True,
+                    "detect_changes": True,
+                    "alert": False,
+                    "notification_emails": [DEFAULT_ALERT_EMAIL],
+                }
+
+            if not probe.should_detect_changes():
+                continue
+            probes.setdefault(probe.name, probe)
+
+            logger.info(f"Running detection for {probe.name} on {probe.platform}")
+            cdf_ts_detector = ts_detectors[probe.get_change_detection_technique()]
+
+            # Probes can have slightly different defintions between mobile and desktop
+            # so we need to account for that here
+            platforms = ("Windows",)
+            if probe.is_mobile:
+                platforms = ("Android",)
+
+            for platform in platforms:
+                logger.info(f"On Platform {platform}")
+
+                # Labeled probes hold one timeseries per label so each of them
+                # needs to be analyzed separately. Unlabeled probes have a single
+                # timeseries which is denoted by a `None` label.
+                for label in self._get_probe_labels(
+                    probe, platform, project, label_filter=label_filter
+                ):
+                    if label is not None:
+                        logger.info(f"On label {label}")
+
+                    # Create the probe signature now so that we can capture when it was first
+                    # seen with change detection enabled. This is used to limit how far back
+                    # we go for getting historical data which reduces the risk for a large
+                    # influx of bugs/emails when a probe is first analyzed.
+                    # XXX: Allow multiple channels, legacy probes, and different apps
+                    probe_signature, _ = PerformanceTelemetrySignature.objects.update_or_create(
+                        channel="Nightly",
+                        platform=platform,
+                        probe=probe.name,
+                        label=label or "",
+                        probe_type="Glean",
+                        application="Fenix" if probe.is_mobile else "Firefox",
+                        defaults={"lower_is_better": probe.lower_is_better},
+                    )
+
+                    try:
+                        # Get data from 30 days before the signature creation date to now
+                        data = get_metric_table(
+                            probe.name,
+                            platform,
+                            android=probe.is_mobile,
+                            use_fog=True,
+                            project=project,
+                            from_build_date=str(
+                                (probe_signature.created - timedelta(days=30)).strftime("%Y-%m-%d")
+                            ),
+                            label=label,
+                        )
+                        if data.empty:
+                            logger.info("No data found")
+                            continue
+
+                        timeseries = mozdetect.TelemetryTimeSeries(data)
+
+                        ts_detector = cdf_ts_detector(timeseries)
+                        detections = ts_detector.detect_changes()
+
+                        if max_detections is not None:
+                            detections = detections[:max_detections]
+
+                        for detection in detections:
+                            # Only get buildids if there might be a detection
+                            if not self._buildid_mappings:
+                                self._make_buildid_to_date_mapping()
+                            alert = self._create_detection_alert(
+                                detection, probe, platform, repository, framework, probe_signature
+                            )
+                            if alert:
+                                alerts.append(alert)
+                    except Exception:
+                        logger.info(f"Failed: {traceback.format_exc()}")
+
+        if alerts:
+            alert_manager = TelemetryAlertManager(probes)
+            alert_manager.manage_alerts(alerts)
+
+    def _get_probe_labels(self, probe, platform, project, label_filter=None):
+        """Get the labels of a probe that need to be analyzed.
+
+        Labeled probe types (e.g. labeled_timing_distribution) hold a separate
+        timeseries for each of their labels so all of them need to be queried, and
+        alerted on, individually. Probes that aren't labeled have a single
+        timeseries which is denoted here with a `None` label.
+
+        :return list: The labels to analyze, or `[None]` for unlabeled probes.
+        """
+        if not probe.is_labeled:
+            return [None]
+
+        if probe.is_mobile:
+            # Labels can currently only be queried for desktop/FOG probes
+            logger.info(f"Skipping labeled mobile probe {probe.name}")
+            return []
+
+        from mozdetect.telemetry_query import get_metric_labels
+
+        try:
+            labels = get_metric_labels(probe.name, platform, project=project)
+        except Exception:
+            logger.info(f"Failed to get the labels of {probe.name}: {traceback.format_exc()}")
+            return []
+
+        if label_filter:
+            labels = [label for label in labels if label == label_filter]
+
+        if not labels:
+            logger.info(f"No labels found for labeled probe {probe.name}")
+
+        return labels
+
+    def _is_prod(self):
+        return settings.SITE_HOSTNAME == "treeherder.mozilla.org"
+
+    def _can_run_telemetry(self):
+        return not self._is_prod() or (time(22, 0) <= datetime.utcnow().time() < time(23, 0))
+
+    def _create_detection_alert(
+        self,
+        detection: object,
+        probe: TelemetryProbe,
+        platform: str,
+        repository: Repository,
+        framework: PerformanceFramework,
+        probe_signature: PerformanceTelemetrySignature,
+    ):
+        detection_date = str(detection.location)
+        if detection_date not in self._buildid_mappings[platform]:
+            # TODO: See if we should expand the range in this situation
+            detection_date = self._find_closest_build_date(detection_date, platform)
+
+        detection_build = self._buildid_mappings[platform][detection_date]
+        prev_build = self._buildid_mappings[platform][detection_build["prev_build"]]
+        next_build = self._buildid_mappings[platform][detection_build["next_build"]]
+
+        # Get the pushes for these builds
+        detection_push = Push.objects.get(
+            revision=detection_build["node"], repository__name=repository.name
+        )
+        prev_push = Push.objects.get(revision=prev_build["node"], repository__name=repository.name)
+        next_push = Push.objects.get(revision=next_build["node"], repository__name=repository.name)
+
+        # Check that an alert summary doesn't already exist around this point (+/- 1 day)
+        latest_timestamp = next_push.time + timedelta(days=1)
+        oldest_timestamp = next_push.time - timedelta(days=1)
+        try:
+            detection_summary = PerformanceTelemetryAlertSummary.objects.filter(
+                repository=repository,
+                framework=framework,
+                push__time__gte=oldest_timestamp,
+                push__time__lte=latest_timestamp,
+            ).latest("push__time")
+        except PerformanceTelemetryAlertSummary.DoesNotExist:
+            detection_summary = None
+
+        if not detection_summary:
+            # Create an alert summary to capture all alerts
+            # that occurred on the same date range
+            detection_summary, _ = PerformanceTelemetryAlertSummary.objects.get_or_create(
+                repository=repository,
+                framework=framework,
+                prev_push=prev_push,
+                push=next_push,
+                original_push=detection_push,
+                sheriffed=False,
+                defaults={
+                    "manually_created": False,
+                    "created": datetime.now(UTC),
+                },
+            )
+
+        try:
+            detection_alert = PerformanceTelemetryAlert.objects.get(
+                summary_id=detection_summary.id, series_signature_id=probe_signature.id
+            )
+        except PerformanceTelemetryAlert.DoesNotExist:
+            detection_alert = None
+
+        if not detection_alert:
+            detection_alert, _ = PerformanceTelemetryAlert.objects.update_or_create(
+                summary_id=detection_summary.id,
+                series_signature=probe_signature,
+                defaults={
+                    "is_regression": is_regression(detection.confidence, probe.lower_is_better),
+                    "amount_pct": round(
+                        (100.0 * abs(detection.new_value - detection.previous_value))
+                        / float(detection.previous_value),
+                        2,
+                    ),
+                    "amount_abs": abs(detection.new_value - detection.previous_value),
+                    "sustained": True,
+                    "direction": detection.direction,
+                    "confidence": detection.confidence,
+                    "prev_value": detection.previous_value,
+                    "new_value": detection.new_value,
+                    "prev_median": detection.optional_detection_info["Interpolated Median"][0],
+                    "new_median": detection.optional_detection_info["Interpolated Median"][1],
+                    "prev_p05": detection.optional_detection_info["Interpolated p05"][0],
+                    "new_p05": detection.optional_detection_info["Interpolated p05"][1],
+                    "prev_p95": detection.optional_detection_info["Interpolated p95"][0],
+                    "new_p95": detection.optional_detection_info["Interpolated p95"][1],
+                    "additional_data": detection.optional_detection_info.get("additional_data", {}),
+                },
+            )
+
+            return TelemetryAlertFactory.construct_alert(
+                telemetry_alert=detection_alert,
+                telemetry_alert_summary=detection_summary,
+                telemetry_signature=probe_signature,
+                optional_detection_info=detection.optional_detection_info,
+            )
+
+    def _get_metric_definitions(self) -> list[dict]:
+        metric_definition_urls = [
+            ("https://dictionary.telemetry.mozilla.org/data/firefox_desktop/index.json", DESKTOP),
+            ("https://dictionary.telemetry.mozilla.org/data/fenix/index.json", MOBILE),
+        ]
+
+        merged_metrics = []
+
+        for url, platform in metric_definition_urls:
+            try:
+                logger.info(f"Getting probes from {url}")
+                response = requests.get(url)
+                response.raise_for_status()
+
+                data = response.json()
+                metrics = data.get("metrics", [])
+                for metric in metrics:
+                    merged_metrics.append(
+                        {
+                            "name": metric["name"].replace(".", "_"),
+                            "data": metric,
+                            "platform": platform,
+                        }
+                    )
+
+                logger.info(f"Found {len(metrics)} probes")
+            except requests.RequestException as e:
+                logger.info(f"Failed to fetch from {url}: {e}")
+            except ValueError:
+                logger.info(f"Invalid JSON from {url}")
+
+        return merged_metrics
+
+    def _make_buildid_to_date_mapping(self):
+        # Always returned in order of newest to oldest, only capture
+        # the newest build for each day, and ignore others. This can
+        # differ between platforms too (e.g. failed builds)
+        buildid_mappings = self._get_buildid_mappings()
+
+        prev_date = {}
+        for build in buildid_mappings["builds"]:
+            platform = self._replace_platform_build_name(build["platform"])
+            if not platform:
+                continue
+            curr_date = str(datetime.strptime(build["buildid"][:8], "%Y%m%d").date())
+
+            platform_builds = self._buildid_mappings.setdefault(platform, {})
+            if curr_date not in platform_builds:
+                platform_builds[curr_date] = build
+
+                if prev_date.get(platform):
+                    platform_builds[prev_date[platform]]["prev_build"] = curr_date
+                    platform_builds[curr_date]["next_build"] = prev_date[platform]
+                else:
+                    platform_builds[curr_date]["next_build"] = curr_date
+
+            prev_date[platform] = curr_date
+
+        # Android (Fenix/GeckoView) nightlies are built from mozilla-central, so
+        # the daily changeset matches the desktop builds. hg.mozilla.org doesn't
+        # expose Android builds in json-firefoxreleases, so reuse the desktop
+        # daily mapping rather than fetching a separate Android build source.
+        for desktop_platform in ("Windows", "Linux", "Darwin"):
+            if desktop_platform in self._buildid_mappings:
+                self._buildid_mappings.setdefault(
+                    "Android", self._buildid_mappings[desktop_platform]
+                )
+                break
+
+    def _get_buildid_mappings(self) -> dict:
+        try:
+            response = requests.get(BUILDID_MAPPING)
+            response.raise_for_status()
+            return loads(response.content)
+        except requests.RequestException as e:
+            raise Exception(f"Failed to download buildid mappings, cannot produce detections: {e}")
+
+    def _replace_platform_build_name(self, platform: str) -> str:
+        if platform == "win64":
+            return "Windows"
+        if platform == "linux64":
+            return "Linux"
+        if platform == "mac":
+            return "Darwin"
+        return ""
+
+    def _find_closest_build_date(self, detection_date: str, platform: str) -> str:
+        # Get the closest date to the detection date
+        prev_date = None
+
+        for date in sorted(list(self._buildid_mappings[platform].keys())):
+            if date > detection_date:
+                break
+            prev_date = date
+
+        return prev_date

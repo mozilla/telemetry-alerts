@@ -1,0 +1,141 @@
+from urllib.parse import quote
+
+GLAM_DASHBOARD = (
+    "https://glam.telemetry.mozilla.org/{product}/probe/{probe}/explore"
+    "?normalizationType=non_normalized&os={os}"
+)
+GLAM_DASHBOARD_LABEL = "&aggKey={label}"
+GLEAN_PROBE_INFO = (
+    "https://dictionary.telemetry.mozilla.org/data/firefox_desktop/metrics/data_{probe_name}.json"
+)
+TREEHERDER_PUSH = "https://treeherder.mozilla.org/jobs?repo={repo}&revision={revision}"
+TREEHERDER_DATES = (
+    "https://treeherder.mozilla.org/jobs?repo={repo}&fromchange={from_change}&tochange={to_change}"
+)
+PUSH_LOG = (
+    "https://hg-edge.mozilla.org/mozilla-central/pushloghtml?"
+    "startdate={start_date}&enddate={end_date}"
+)
+BASE_TELEMETRY_DASHBOARD = "https://gmierz.github.io/telemetry-alert-dashboard/"
+TELEMETRY_ALERT_DASHBOARD = (
+    BASE_TELEMETRY_DASHBOARD + "?view=grouped&alertSummaryId={alert_summary_id}"
+)
+TELEMETRY_ALERT_DASHBOARD_SUMMARY = (
+    BASE_TELEMETRY_DASHBOARD + "?view=without-bugs&alertSummaryId={summary_id}"
+)
+TELEMETRY_ALERT_DASHBOARD_ALERT = BASE_TELEMETRY_DASHBOARD + "?view=without-bugs&alertId={alert_id}"
+BZ_TELEMETRY_ALERTS_CHANGED = (
+    "https://bugzilla.mozilla.org/rest/bug?"
+    "include_fields=id&include_fields=resolution"
+    "&f1=keywords&o1=allwords&v1=telemetry-alert"
+    "&f2=resolution&o2=changedbefore&v2={today}"
+    "&f3=resolution&o3=changedafter&v2={prev_day}"
+)
+REVISION_INFO = "https://hg.mozilla.org/mozilla-central/json-log/%s"
+
+DEFAULT_CHANGE_DETECTION = "cdf_squared"
+
+SUPPORTED_LABELED_METRIC_TYPES = (
+    "labeled_timing_distribution",
+    "labeled_memory_distribution",
+)
+DESKTOP_PLATFORMS = (
+    "Windows",
+    "Linux",
+    "Darwin",
+)
+CHANNEL_TO_REPO_MAPPING = {
+    "Nightly": "mozilla-central",
+    "Release": "mozilla-release",
+    "Beta": "mozilla-beta",
+}
+
+MODIFIABLE_ALERT_FIELDS = ("status",)
+DEFAULT_ALERT_EMAIL = "gmierzwinski@mozilla.com"
+DEFAULT_BUGZILLA_INFO = ("Testing", "Performance")
+EMAIL_LIMIT = 50
+
+DESKTOP = "desktop"
+MOBILE = "mobile"
+
+# Android telemetry alerting is still being rolled out, so it is intentionally
+# limited to a hardcoded allowlist of probes. Alerts for these probes only ever
+# produce emails (never bugs), and those emails are always routed to
+# ANDROID_ALERT_EMAIL regardless of what the probe definition specifies.
+ANDROID_ALERT_EMAIL = "perf-telemetry-alerts@mozilla.com"
+ANDROID_PROBE_ALLOWLIST = (
+    "perf_largest_contentful_paint",
+    "performance_pageload_fcp",
+    "networking_http_channel_page_open_to_first_sent",
+    "networking_dns_lookup_time",
+    "network_tcp_connection",
+    "dns_native_lookup_time",
+)
+
+
+def is_regression(confidence, lower_is_better, tolerance=0.05):
+    """Determine if the detection is a regression, improvement, or mixed.
+
+    The confidence is: before CDF - after CDF
+    This is a **subtraction along the x-axis**. This means that a shift to
+    the left would have the after values at a higher y-value than the before values.
+
+    Therefore we have the following cases:
+        * Lower is better is true:
+            * Confidence negative means improvement
+            * Confidence positive means regression
+        * Lower is better is false:
+            * Confidence negative means regression
+            * confidence positive means improvement
+    """
+    if abs(confidence) <= tolerance:
+        # In any case, if confidence is within this
+        # tolerance window the result is unknown
+        return None
+
+    if lower_is_better is not None:
+        if lower_is_better:
+            if confidence <= 0:
+                return False
+            return True
+        else:
+            if confidence < 0:
+                return True
+            return False
+
+    # Unknown how to interpret the confidence
+    return None
+
+
+def get_glam_dashboard_link(telemetry_signature):
+    if telemetry_signature.platform in DESKTOP_PLATFORMS:
+        product = "fog"
+    else:
+        product = "fenix"
+    link = GLAM_DASHBOARD.format(
+        product=product,
+        probe=telemetry_signature.probe,
+        os=telemetry_signature.platform,
+    )
+
+    if telemetry_signature.label:
+        # Labeled probes display one label at a time on their dashboard
+        link += GLAM_DASHBOARD_LABEL.format(label=quote(telemetry_signature.label))
+
+    return link
+
+
+def get_treeherder_detection_link(detection_range, telemetry_signature):
+    repo = CHANNEL_TO_REPO_MAPPING.get(telemetry_signature.channel, "mozilla-central")
+
+    return TREEHERDER_PUSH.format(repo=repo, revision=detection_range["detection"].revision)
+
+
+def get_treeherder_detection_range_link(detection_range, telemetry_signature):
+    repo = CHANNEL_TO_REPO_MAPPING.get(telemetry_signature.channel, "mozilla-central")
+
+    return TREEHERDER_DATES.format(
+        repo=repo,
+        from_change=detection_range["from"].revision,
+        to_change=detection_range["to"].revision,
+    )

@@ -1,0 +1,180 @@
+import logging
+import traceback
+
+import requests
+
+from treeherder.perf.auto_perf_sheriffing.telemetry_alerting.utils import (
+    DEFAULT_ALERT_EMAIL,
+    DEFAULT_BUGZILLA_INFO,
+    DEFAULT_CHANGE_DETECTION,
+    DESKTOP,
+    GLEAN_PROBE_INFO,
+    MOBILE,
+    SUPPORTED_LABELED_METRIC_TYPES,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class TelemetryProbeValidationError(Exception):
+    """Raised when a probes information is incorrect, or missing."""
+
+    def __init__(self, name, message):
+        super().__init__(f"Probe {name}: {message}")
+
+
+class TelemetryProbe:
+    def __init__(self, metric_info):
+        self.metric_info = metric_info
+        self.name = self.metric_info["name"]
+        self._time_unit = ""
+        self._should_file_bug = None
+        self._should_email = None
+        self._probe_info = None  # Stores full probe info from GLEAN_PROBE_INFO
+
+        self.monitor_info = self.metric_info["data"].get("monitor")
+        if self.monitor_info["detect_changes"]:
+            self.verify_probe_definition()
+            self.should_file_bug()
+            self.should_email()
+
+    @property
+    def monitor_info(self):
+        return self._monitor_info
+
+    @monitor_info.setter
+    def monitor_info(self, monitor_info):
+        self._monitor_info = {}
+        if isinstance(monitor_info, bool):
+            self._monitor_info["detect_changes"] = monitor_info
+        elif isinstance(monitor_info, dict) and monitor_info:
+            self._monitor_info["detect_changes"] = True
+            self._monitor_info.update(monitor_info)
+        elif monitor_info is None or (isinstance(monitor_info, dict) and not monitor_info):
+            self._monitor_info["detect_changes"] = False
+        else:
+            raise TelemetryProbeValidationError(
+                self.name,
+                f"`monitor` field must by either a boolean or dictionary. "
+                f"Found: {type(monitor_info)}",
+            )
+
+    @property
+    def time_unit(self):
+        if not self._time_unit:
+            self.fetch_probe_info()
+            if self._probe_info:
+                self._time_unit = self._probe_info.get("time_unit", "")
+        return self._time_unit
+
+    @property
+    def platform(self):
+        return self.metric_info["platform"]
+
+    @property
+    def metric_type(self):
+        return self.metric_info["data"].get("type", "")
+
+    @property
+    def is_labeled(self):
+        return self.metric_type in SUPPORTED_LABELED_METRIC_TYPES
+
+    @property
+    def is_desktop(self):
+        return self.platform == DESKTOP
+
+    @property
+    def is_mobile(self):
+        return self.platform == MOBILE
+
+    @property
+    def lower_is_better(self):
+        return self.monitor_info.get("lower_is_better")
+
+    def get_change_detection_technique(self):
+        return self.monitor_info.get("change_detection_technique", DEFAULT_CHANGE_DETECTION)
+
+    def should_file_bug(self):
+        # Only file bugs when alert is set to True
+        return self.monitor_info.get("alert", False)
+
+    def should_email(self):
+        # Only produce emails when alert is undefined or set to False
+        return not self.monitor_info.get("alert", False)
+
+    def should_detect_changes(self):
+        return self.monitor_info.get("detect_changes", False)
+
+    def get_notification_emails(self, default=DEFAULT_ALERT_EMAIL):
+        self.setup_notification_emails(default=default)
+        return self.monitor_info.get(
+            "bugzilla_notification_emails", self.monitor_info.get("notification_emails", [default])
+        )
+
+    def get_bugzilla_info(self, default=DEFAULT_BUGZILLA_INFO):
+        self.setup_bugzilla_info(default=default)
+        return self.monitor_info.get("bugzilla_info", default)
+
+    def fetch_probe_info(self):
+        if self._probe_info is not None:
+            return
+
+        try:
+            url = GLEAN_PROBE_INFO.format(probe_name=self.name)
+            response = requests.get(url)
+            response.raise_for_status()
+            self._probe_info = response.json()
+        except Exception:
+            logger.warning(
+                f"Failed to obtain extra information for probe {self.name}: "
+                f"{traceback.format_exc()}"
+            )
+            self._probe_info = {}
+
+    def setup_notification_emails(self, default=DEFAULT_ALERT_EMAIL):
+        # These emails are only obtained when we have an alert that we need to
+        # produce an email for. They are also only obtained if notification emails
+        # aren't already found in some fields.
+        if self.monitor_info.get("bugzilla_notification_emails", None) or self.monitor_info.get(
+            "notification_emails", None
+        ):
+            return
+
+        self.fetch_probe_info()
+        if self._probe_info:
+            self.monitor_info["notification_emails"] = self._probe_info.get(
+                "notification_emails", [default]
+            )
+        else:
+            self.monitor_info["notification_emails"] = [default]
+
+    def setup_bugzilla_info(self, default=DEFAULT_BUGZILLA_INFO):
+        if self.monitor_info.get("bugzilla_info"):
+            return
+
+        self.fetch_probe_info()
+        self.monitor_info["bugzilla_info"] = default
+        if self._probe_info:
+            raw_bugzilla_info = ""
+            for tag in self._probe_info["tags"]:
+                # Bug 2030837 - Best effort to find the bugzilla info
+                # reliably before that bug is looked at.
+                if "bugzilla" in tag.get("description", "").lower():
+                    raw_bugzilla_info = tag.get("name", "")
+                    break
+            if raw_bugzilla_info:
+                self.monitor_info["bugzilla_info"] = tuple(
+                    el.strip() for el in raw_bugzilla_info.split("::")
+                )
+
+    def verify_probe_definition(self):
+        if self.monitor_info.get("alert", False) and not self.monitor_info.get(
+            "bugzilla_notification_emails"
+        ):
+            # This probe will produce bugs, so it needs to have the
+            # bugzilla_notification_emails set
+            raise TelemetryProbeValidationError(
+                self.name,
+                "`bugzilla_notification_emails` must be set to valid Bugzilla account "
+                "emails when a probe is set to produce alerts.",
+            )
