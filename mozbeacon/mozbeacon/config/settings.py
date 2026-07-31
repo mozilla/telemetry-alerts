@@ -16,6 +16,16 @@ env = environ.Env()
 
 # mozbeacon/mozbeacon/config/settings.py -> mozbeacon/
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = PROJECT_DIR.parent
+
+# Load the repository-root .env for local development. environ.Env only reads
+# os.environ on its own, so without this every credential in that file silently
+# resolves to its default and the first sign of trouble is an outbound call that
+# quietly does nothing. Real environment variables still win, which is what keeps
+# deployment on Secret Manager rather than a file.
+DOTENV = REPO_ROOT / ".env"
+if DOTENV.is_file():
+    env.read_env(DOTENV, overwrite=False)
 
 DEBUG = env.bool("DEBUG", default=False)
 SECRET_KEY = env("SECRET_KEY", default="insecure-local-development-key-do-not-deploy")

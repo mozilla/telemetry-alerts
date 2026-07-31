@@ -26,15 +26,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Compose only uses the root .env for interpolation in this file. Naming it here as
+    # well is what actually puts the credentials in it into the container's environment.
+    env_file:
+      - path: .env
+        required: false
     environment:
       DEBUG: "1"
       LOG_LEVEL: DEBUG
       # Inside the compose network postgres is still on its own 5432. The 5433 mapping
       # above is only for the host.
       DATABASE_URL: psql://mozbeacon:mozbeacon@postgres:5432/telemetry_alerts
-      # Outbound stays off locally. Nothing here should ever reach Bugzilla or email.
-      TELEMETRY_ENABLE_BUGS: "0"
-      TELEMETRY_ENABLE_EMAILS: "0"
+      # Outbound stays off locally unless .env says otherwise. Interpolated rather than
+      # hardcoded because entries here override env_file, so a hardcoded 0 would make
+      # setting these in .env look like it worked while changing nothing.
+      TELEMETRY_ENABLE_BUGS: "${TELEMETRY_ENABLE_BUGS:-0}"
+      TELEMETRY_ENABLE_EMAILS: "${TELEMETRY_ENABLE_EMAILS:-0}"
       BIGQUERY_PROJECT: mozdata
       # Where the BigQuery client looks for Application Default Credentials
       CLOUDSDK_CONFIG: /gcloud
