@@ -1,6 +1,8 @@
 import logging
 import traceback
 
+from django.conf import settings
+
 from mozbeacon.detection.alert import (
     TelemetryAlertFactory,
 )
@@ -113,8 +115,14 @@ class TelemetryAlertManager(AlertManager):
                     bug_alert = alert
 
             try:
-                self.bug_manager.modify_bug(bug, changes)
-                logger.info(f"Made modifications to telemetry alert bug {bug}")
+                if settings.TELEMETRY_ENABLE_BUGS:
+                    self.bug_manager.modify_bug(bug, changes)
+                    logger.info(f"Made modifications to telemetry alert bug {bug}")
+                else:
+                    logger.warning(
+                        f"TELEMETRY_ENABLE_BUGS is off, marking bug {bug} modified "
+                        "without touching Bugzilla"
+                    )
 
                 bug_alert.telemetry_alert_summary.bugs_modified = True
                 bug_alert.telemetry_alert.bug_modified = True
@@ -150,6 +158,13 @@ class TelemetryAlertManager(AlertManager):
         try:
             probe = self._get_probe_info(alert.telemetry_signature.probe)
             if not self.__should_file_bug(probe, alert):
+                return
+
+            if not settings.TELEMETRY_ENABLE_BUGS:
+                # No bug_number is invented here. A stub would feed see_also
+                # modifications and the Bugzilla resolution sync against a bug that
+                # does not exist.
+                logger.warning(f"TELEMETRY_ENABLE_BUGS is off, not filing a bug for {alert}")
                 return
 
             # File a bug
@@ -206,9 +221,14 @@ class TelemetryAlertManager(AlertManager):
                 return
 
             # Send notification emails for the alert
-            self.email_manager.email_alert(probe, alert)
-            self._email_made()
-            logger.info(f"Created email notification for {alert}")
+            if settings.TELEMETRY_ENABLE_EMAILS:
+                self.email_manager.email_alert(probe, alert)
+                self._email_made()
+                logger.info(f"Created email notification for {alert}")
+            else:
+                logger.warning(
+                    f"TELEMETRY_ENABLE_EMAILS is off, marking {alert} notified without sending"
+                )
 
             # Set the alert to notified
             alert.telemetry_alert.notified = True

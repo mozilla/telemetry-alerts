@@ -1096,3 +1096,217 @@ class TestEmailLimiting:
 
         # Should now have 8 total emails sent (5 + 3)
         assert telemetry_alert_manager._emails_made == 8
+
+
+class TestOutboundKillSwitches:
+    """TELEMETRY_ENABLE_BUGS and TELEMETRY_ENABLE_EMAILS gate everything that leaves the
+    service, and nothing that doesn't. This is what lets the new service run against a
+    copy of the migrated database while Treeherder is still the one filing bugs.
+    """
+
+    @pytest.fixture
+    def bug_filing_alert(self, telemetry_alert_obj, mock_probes_dict):
+        """An alert whose probe wants a bug filed, with no bug yet."""
+        probe = mock_probes_dict["test_probe"]
+        probe.should_file_bug.return_value = True
+        probe.should_email.return_value = False
+        telemetry_alert_obj.telemetry_signature.probe = "test_probe"
+        telemetry_alert_obj.telemetry_alert.bug_number = None
+        telemetry_alert_obj.telemetry_alert.save()
+        return telemetry_alert_obj
+
+    @pytest.fixture
+    def emailing_alert(self, telemetry_alert_obj, mock_probes_dict):
+        """An alert whose probe wants an email, not a bug."""
+        probe = mock_probes_dict["test_probe"]
+        probe.should_file_bug.return_value = False
+        probe.should_email.return_value = True
+        telemetry_alert_obj.telemetry_signature.probe = "test_probe"
+        telemetry_alert_obj.telemetry_alert.bug_number = None
+        telemetry_alert_obj.telemetry_alert.notified = False
+        telemetry_alert_obj.telemetry_alert.save()
+        return telemetry_alert_obj
+
+    def test_bugs_off_files_nothing(self, telemetry_alert_manager, bug_filing_alert, settings):
+        settings.TELEMETRY_ENABLE_BUGS = False
+
+        telemetry_alert_manager._file_alert_bug(bug_filing_alert)
+
+        telemetry_alert_manager.bug_manager.file_bug.assert_not_called()
+        bug_filing_alert.telemetry_alert.refresh_from_db()
+        assert bug_filing_alert.telemetry_alert.bug_number is None
+
+    def test_bugs_off_skips_the_alert_instead_of_failing_it(
+        self, telemetry_alert_manager, bug_filing_alert, settings
+    ):
+        """The gate must not look like a filing failure. _file_alert_bug deletes the
+        alert row when filing raises, which during a shadow run would empty the table
+        and read as a catastrophic port bug rather than a disabled switch.
+        """
+        settings.TELEMETRY_ENABLE_BUGS = False
+        alert_id = bug_filing_alert.telemetry_alert.id
+
+        telemetry_alert_manager._file_alert_bug(bug_filing_alert)
+
+        assert PerformanceTelemetryAlert.objects.filter(id=alert_id).exists()
+        assert not getattr(bug_filing_alert, "failed", False)
+
+    def test_bugs_on_still_files(self, telemetry_alert_manager, bug_filing_alert, settings):
+        settings.TELEMETRY_ENABLE_BUGS = True
+        telemetry_alert_manager.bug_manager.file_bug.return_value = {"id": 999}
+
+        telemetry_alert_manager._file_alert_bug(bug_filing_alert)
+
+        telemetry_alert_manager.bug_manager.file_bug.assert_called_once()
+        bug_filing_alert.telemetry_alert.refresh_from_db()
+        assert bug_filing_alert.telemetry_alert.bug_number == 999
+
+    def test_bugs_off_writes_no_see_also_but_marks_modified(
+        self, telemetry_alert_manager, bug_filing_alert, settings
+    ):
+        """Same contract as the email path. Bugzilla is untouched, and the rows are
+        marked so house keeping stops retrying them.
+        """
+        settings.TELEMETRY_ENABLE_BUGS = False
+        bug_filing_alert.telemetry_alert.bug_number = 12345
+        bug_filing_alert.telemetry_alert.bug_modified = False
+        bug_filing_alert.telemetry_alert.save()
+        summary = bug_filing_alert.telemetry_alert_summary
+        summary.bugs_modified = False
+        summary.save()
+
+        with patch("mozbeacon.detection.alert_manager.TelemetryBugModifier") as modifier:
+            modifier.get_bug_modifications.return_value = {12345: {"see_also": ["999"]}}
+            telemetry_alert_manager.modify_alert_bugs([bug_filing_alert], [], [])
+
+        telemetry_alert_manager.bug_manager.modify_bug.assert_not_called()
+        summary.refresh_from_db()
+        bug_filing_alert.telemetry_alert.refresh_from_db()
+        assert summary.bugs_modified is True
+        assert bug_filing_alert.telemetry_alert.bug_modified is True
+
+    def test_emails_off_sends_nothing_but_marks_notified(
+        self, telemetry_alert_manager, emailing_alert, settings
+    ):
+        """notified is set anyway, so the alert does not sit in a backlog that would
+        flush all at once against the 50 email cap when emails are switched back on.
+        The tradeoff is that alerts detected while the switch is off never get one.
+        """
+        settings.TELEMETRY_ENABLE_EMAILS = False
+
+        telemetry_alert_manager._email_alert(emailing_alert)
+
+        telemetry_alert_manager.email_manager.email_alert.assert_not_called()
+        emailing_alert.telemetry_alert.refresh_from_db()
+        assert emailing_alert.telemetry_alert.notified is True
+
+    def test_emails_off_does_not_consume_the_email_budget(
+        self, telemetry_alert_manager, emailing_alert, settings
+    ):
+        """Nothing was sent, so the rate limit counter must not move."""
+        settings.TELEMETRY_ENABLE_EMAILS = False
+        before = telemetry_alert_manager._emails_left()
+
+        telemetry_alert_manager._email_alert(emailing_alert)
+
+        assert telemetry_alert_manager._emails_left() == before
+
+    def test_emails_on_still_sends(self, telemetry_alert_manager, emailing_alert, settings):
+        settings.TELEMETRY_ENABLE_EMAILS = True
+
+        telemetry_alert_manager._email_alert(emailing_alert)
+
+        telemetry_alert_manager.email_manager.email_alert.assert_called_once()
+        emailing_alert.telemetry_alert.refresh_from_db()
+        assert emailing_alert.telemetry_alert.notified is True
+
+    def test_email_retries_drain_the_backlog_without_sending(
+        self, telemetry_alert_manager, emailing_alert, settings
+    ):
+        """House keeping still runs with emails off. It marks the pending alerts done
+        rather than leaving them to accumulate, which is the point of marking notified
+        at the call site instead of bailing out of the whole stage.
+        """
+        settings.TELEMETRY_ENABLE_EMAILS = False
+
+        telemetry_alert_manager._redo_email_alerts()
+
+        telemetry_alert_manager.email_manager.email_alert.assert_not_called()
+        emailing_alert.telemetry_alert.refresh_from_db()
+        assert emailing_alert.telemetry_alert.notified is True
+
+    def test_bug_modification_retries_drain_without_touching_bugzilla(
+        self,
+        telemetry_alert_manager,
+        test_telemetry_alert_summary,
+        create_telemetry_signature,
+        create_telemetry_alert,
+        mock_probe,
+        settings,
+    ):
+        """The mirror of the above for _redo_bug_modifications.
+
+        Two alerts under one summary, both with bugs, which is what makes
+        SeeAlsoModifier produce real modifications to retry. A single alert has nothing
+        to link to and so produces none, guard or no guard.
+        """
+        settings.TELEMETRY_ENABLE_BUGS = False
+        test_telemetry_alert_summary.bugs_modified = False
+        test_telemetry_alert_summary.save()
+
+        rows = []
+        for name, bug in (("probe_one", 111), ("probe_two", 222)):
+            signature = create_telemetry_signature(probe=name)
+            telemetry_alert_manager.probes[name] = mock_probe
+            rows.append(create_telemetry_alert(signature, bug_number=bug, bug_modified=False))
+
+        telemetry_alert_manager._redo_bug_modifications()
+
+        telemetry_alert_manager.bug_manager.modify_bug.assert_not_called()
+
+        # Only the bugs that actually received a see_also change are marked. The group
+        # flag on the summary is the one house keeping filters on, so that is what has
+        # to clear for the retry to stop.
+        test_telemetry_alert_summary.refresh_from_db()
+        assert test_telemetry_alert_summary.bugs_modified is True
+        for row in rows:
+            row.refresh_from_db()
+        assert any(row.bug_modified for row in rows)
+
+    def test_bugzilla_resolution_sync_stays_live(self, telemetry_alert_manager, settings):
+        """update_alerts reads Bugzilla and writes only locally. Gating it would stop the
+        shadow database tracking resolutions while Treeherder keeps tracking them, which
+        turns the migrated backlog into pure noise in the cutover diff.
+        """
+        settings.TELEMETRY_ENABLE_BUGS = False
+        settings.TELEMETRY_ENABLE_EMAILS = False
+
+        with patch("mozbeacon.detection.alert_manager.TelemetryAlertModifier") as modifier:
+            modifier.get_alert_updates.return_value = ({}, {})
+            telemetry_alert_manager.update_alerts([])
+
+        modifier.get_alert_updates.assert_called_once()
+
+    def test_is_regression_recheck_stays_live(
+        self, telemetry_alert_manager, emailing_alert, mock_probe, settings
+    ):
+        """Also local-only, so it runs regardless of the switches."""
+        settings.TELEMETRY_ENABLE_BUGS = False
+        settings.TELEMETRY_ENABLE_EMAILS = False
+
+        # This stage rebuilds alerts from rows, so the probe has to be registered under
+        # the signature name that is actually stored.
+        signature = emailing_alert.telemetry_signature
+        mock_probe.lower_is_better = True
+        telemetry_alert_manager.probes = {signature.probe: mock_probe}
+
+        # lower_is_better with a positive confidence is a regression, so the stored
+        # False is stale and has to be corrected.
+        emailing_alert.telemetry_alert.is_regression = False
+        emailing_alert.telemetry_alert.confidence = 0.9
+        emailing_alert.telemetry_alert.save()
+
+        telemetry_alert_manager._recheck_is_regression()
+
+        emailing_alert.telemetry_alert.refresh_from_db()
+        assert emailing_alert.telemetry_alert.is_regression is True

@@ -14,6 +14,19 @@ from mozbeacon.services.push import Push
 
 
 @pytest.fixture(autouse=True)
+def enable_outbound(settings):
+    """Turn the outbound kill switches on for the suite.
+
+    They default to off so that a fresh deployment, or a shadow run, cannot reach
+    Bugzilla or email until someone enables it deliberately. Most tests here are about
+    what the service does when it is allowed to send, so they opt in. The tests in
+    TestOutboundKillSwitches override this to cover the off case.
+    """
+    settings.TELEMETRY_ENABLE_BUGS = True
+    settings.TELEMETRY_ENABLE_EMAILS = True
+
+
+@pytest.fixture(autouse=True)
 def stub_bigquery_credentials():
     """Detection resolves Application Default Credentials before it queries anything.
 
