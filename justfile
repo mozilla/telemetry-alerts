@@ -10,10 +10,11 @@
 #
 # Two rules keep this honest:
 #
-#   1. Every recipe is the command CI runs, not a convenience variant of it. When
-#      .github/workflows/ lands it should invoke these recipes rather than duplicate
-#      them. The moment `just test` and ci.yml diverge, the local signal is worthless
-#      and people stop trusting it.
+#   1. Every recipe is the command CI runs, not a convenience variant of it.
+#      .github/workflows/ci.yml invokes these recipes rather than duplicating them, and
+#      the deploy workflows should build with `just build` when they land. The moment
+#      `just test` and ci.yml diverge, the local signal is worthless and people stop
+#      trusting it.
 #   2. `lint` and `format` are the pre-commit hooks themselves rather than a second copy
 #      of the same ruff invocation, so the two cannot disagree. They run on the host,
 #      since pre-commit manages its own hook environments.
@@ -116,9 +117,10 @@ test-alert-email *args:
 test-alert-email-send *args:
     {{mb}} python manage.py test_alert_email {{args}}
 
-# Build the deployed image.
-build:
-    docker build -f mozbeacon/Dockerfile --target runtime -t mozbeacon:latest .
+# Build the deployed image. Takes a tag, so the deploy workflow pushes an image built
+# by this recipe rather than by a command that only exists in CI.
+build tag="mozbeacon:latest":
+    docker build -f mozbeacon/Dockerfile --target runtime -t {{tag}} .
 
 # Serve the dashboard on http://localhost:8080.
 ui-dev:

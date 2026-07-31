@@ -1,0 +1,25 @@
+name: Setup just
+description: >
+  Install a pinned just, so workflows can invoke the same recipes a developer runs
+  instead of duplicating the commands inside them.
+
+inputs:
+  version:
+    description: just version to install. Pinned here so a bump is one reviewable line.
+    required: false
+    default: "1.57.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install just ${{ inputs.version }}
+      shell: bash
+      env:
+        JUST_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.local/bin"
+        curl --proto '=https' --tlsv1.2 -sSfL https://just.systems/install.sh \
+          | bash -s -- --tag "$JUST_VERSION" --to "$HOME/.local/bin"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/just" --version

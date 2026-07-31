@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint and lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-just
+
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.9.28"
+
+      - name: uv.lock agrees with pyproject.toml
+        run: just lock-check
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: mozbeacon/.python-version
+
+      - name: Install pre-commit
+        run: python -m pip install --disable-pip-version-check "pre-commit==4.6.1"
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Lint
+        id: lint
+        run: just lint
+
+      - name: What lint would have changed
+        if: ${{ failure() && steps.lint.conclusion == 'failure' }}
+        run: git --no-pager diff
+
+  test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-just
+
+      - name: Build the dev image
+        run: just build-dev
+
+      - name: No missing migrations
+        run: just migrate-check
+
+      - name: Test suite
+        run: just test
+
+      - name: Postgres logs
+        if: failure()
+        run: docker compose logs --no-color postgres
+
+  image:
+    name: Deployed image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-just
+      - name: Build the runtime image
+        run: just build
