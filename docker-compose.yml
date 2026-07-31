@@ -26,6 +26,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Django's autoreloading dev server rather than the image's gunicorn CMD, so that
+    # `just start` picks up code changes. gunicorn is what the runtime image runs, and
+    # is exercised by `just build`.
+    command: python manage.py runserver 0.0.0.0:8000
+    # runserver ignores SIGTERM, so without this compose waits out its stop timeout.
+    stop_signal: SIGINT
     # Compose only uses the root .env for interpolation in this file. Naming it here as
     # well is what actually puts the credentials in it into the container's environment.
     env_file:

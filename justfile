@@ -1,4 +1,12 @@
-# Task runner for both stacks. Run from anywhere in the repository.
+# Task runner. Run from anywhere in the repository.
+#
+# Everything runs in the backend container, so there is one runtime and it is the one
+# that gets deployed. The host virtualenv exists only so your editor can resolve imports
+# and discover tests, and no recipe below uses it.
+#
+# The exceptions are the recipes that manage dependencies rather than run code. uv is a
+# host tool and is not installed in the image, so `setup`, `lock` and `lock-check` run on
+# the host. After changing dependencies, rebuild with `just build-dev`.
 #
 # Two rules keep this honest:
 #
@@ -6,39 +14,55 @@
 #      .github/workflows/ lands it should invoke these recipes rather than duplicate
 #      them. The moment `just test` and ci.yml diverge, the local signal is worthless
 #      and people stop trusting it.
-#   2. `lint` matches .pre-commit-config.yaml. Both use ruff, and the version is pinned
-#      in two places that have to agree: the dev dependency group in
-#      mozbeacon/pyproject.toml and the hook rev in .pre-commit-config.yaml.
-#
-# The backend runs through `uv run --directory mozbeacon` so no recipe depends on where
-# you invoked it from.
+#   2. `lint` and `format` are the pre-commit hooks themselves rather than a second copy
+#      of the same ruff invocation, so the two cannot disagree. They run on the host,
+#      since pre-commit manages its own hook environments.
 
-mb := "uv run --directory mozbeacon"
+# Creates a container per invocation, which costs about 1.4s over running on the host.
+# That is the price of not maintaining a second environment.
+mb := "docker compose run --rm backend"
+
+# For anyone whose habit is `just format`. Drop this if you would rather have one name.
+alias format := lint
 
 # Show the available recipes.
 default:
     @just --list
 
-# Install the backend toolchain and the git hooks.
+# Build the image, sync the host virtualenv for your editor, install the git hooks.
 setup:
+    docker compose build backend
     uv sync --directory mozbeacon
     pre-commit install
 
-# Re-resolve the dependency lock after editing pyproject.toml.
+# Re-resolve the dependency lock after editing pyproject.toml, then rebuild.
 lock:
     uv lock --directory mozbeacon
+    docker compose build backend
 
 # Fail if uv.lock and pyproject.toml disagree. CI runs this before anything else.
 lock-check:
     uv lock --directory mozbeacon --check
 
-# Start Postgres and the backend in the background.
+# Rebuild the local image.
+build-dev:
+    docker compose build backend
+
+# Start Postgres and the API in the background. The API autoreloads on code changes.
 start:
     docker compose up -d
 
-# Start Postgres. Published on 5433, since Treeherder's own container owns 5432.
+# Start Postgres on its own. Published on 5433, since Treeherder's container owns 5432.
 db:
     docker compose up -d postgres
+
+# Follow the API logs.
+logs:
+    docker compose logs -f backend
+
+# Run the API in the foreground, so you can watch it and stop it with ctrl-c.
+api:
+    docker compose up backend
 
 # Stop everything, keeping the database volume.
 down:
@@ -56,44 +80,21 @@ makemigrations *args:
 migrate-check:
     {{mb}} python manage.py makemigrations --check --dry-run
 
-# Serve the API on http://localhost:8000.
-api:
-    {{mb}} python manage.py runserver
-
 # Django shell.
 shell:
     {{mb}} python manage.py shell
 
-# Run the backend suite. Args pass through, so `just test -k label -x` works.
+# Run the suite. Args pass through, so `just test -k label -x` works.
 test *args:
     {{mb}} pytest {{args}}
 
-# Run the backend suite inside the container, which is what CI builds and deploys.
-test-docker *args:
-    docker compose run --rm backend pytest {{args}}
-
-# Check formatting and lints without changing anything. CI runs this.
-lint:
-    {{mb}} ruff check .
-    {{mb}} ruff format --check .
-
-# Apply the fixes that `lint` reports.
-fmt:
-    {{mb}} ruff check --fix .
-    {{mb}} ruff format .
-
-# Run the real pre-commit hooks over every tracked file.
-hooks:
-    pre-commit run --all-files
-
-# Accepts --probe-filter, --platform-filter, --label-filter and --max-detections.
-# Needs BigQuery credentials, see the README.
+# Fix formatting and lints in place, exiting nonzero if anything needed fixing.
+lint *args:
+    pre-commit run --all-files {{args}}
 
 # Nightly detection.
 detect *args:
     {{mb}} python manage.py detect {{args}}
-
-# The fast-iteration path this migration exists to enable.
 
 # Detection against one probe, rolled back afterwards unless you pass --keep.
 test-alert *args:
@@ -115,15 +116,9 @@ test-alert-email *args:
 test-alert-email-send *args:
     {{mb}} python manage.py test_alert_email {{args}}
 
-# Context is the repository root so that deploy/ is reachable.
-
 # Build the deployed image.
 build:
     docker build -f mozbeacon/Dockerfile --target runtime -t mozbeacon:latest .
-
-# Static files today, so there is no bundler and no `test-ui`. Both arrive when the
-# dashboard gains a build system, at which point `test` splits into test-mozbeacon
-# and test-ui.
 
 # Serve the dashboard on http://localhost:8080.
 ui-dev:
