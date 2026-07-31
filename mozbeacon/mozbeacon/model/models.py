@@ -116,9 +116,7 @@ class PerformanceTelemetryAlertSummary(models.Model):
     push_timestamp = models.DateTimeField(db_index=True)
     original_push_revision = models.CharField(max_length=40, null=True, default=None)
     original_push_timestamp = models.DateTimeField(null=True, default=None)
-    original_prev_push_revision = models.CharField(
-        max_length=40, null=True, default=None
-    )
+    original_prev_push_revision = models.CharField(max_length=40, null=True, default=None)
     original_prev_push_timestamp = models.DateTimeField(null=True, default=None)
 
     manually_created = models.BooleanField(default=False)  # 2b: drop

@@ -1,0 +1,74 @@
+[project]
+name = "mozbeacon"
+version = "0.1.0"
+description = "Telemetry change detection and alerting"
+requires-python = ">=3.13,<3.14"
+
+# Versions are deliberately pinned to whatever Treeherder runs today, so that the
+# shadow run in Phase 7 compares two systems that differ only in the port. Upgrades
+# — mozdetect included — happen after cutover, as their own change with their own diff.
+dependencies = [
+    "django==6.0.3",
+    "django-environ==0.13.0",
+    "djangorestframework==3.17.0",
+    "psycopg[binary]==3.3.3",
+    "gunicorn==26.0.0",
+    "requests==2.32.5",
+    "taskcluster==88.0.5",
+    "json-e==4.8.1",
+    "google-cloud-bigquery==3.29.0",
+    "mozdetect==0.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.2",
+    "pytest-django==4.12.0",
+    "pytest-cov==7.0.0",
+    "responses==0.25.8",
+    "ruff==0.9.0",
+]
+
+[tool.uv]
+# Django is run from the source tree rather than installed into site-packages, so
+# there is nothing to build. This keeps `uv sync --frozen --no-install-project` in
+# the Dockerfile a pure dependency layer.
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    "W",
+    # pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # pep8-naming
+    "N",
+    # isort
+    "I",
+]
+ignore = [
+    # E501: line too long
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+# "treeherder" is first-party in the repository these modules were copied from, and
+# listing it here keeps them byte-identical to their originals rather than reshuffling
+# imports that Phase 3 rewires to mozbeacon.* anyway. Drop it once that lands.
+known-first-party = ["mozbeacon", "treeherder"]
+
+[tool.ruff.format]
+exclude = ["mozbeacon/*/migrations/*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "mozbeacon.config.settings"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers"

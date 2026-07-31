@@ -1,0 +1,48 @@
+services:
+  postgres:
+    # Postgres 17 to match what Phase 1 provisions on Cloud SQL.
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mozbeacon
+      POSTGRES_PASSWORD: mozbeacon
+      POSTGRES_DB: telemetry_alerts
+    ports:
+      # 5433 on the host, not 5432: Treeherder's own postgres container owns 5432 on a
+      # development machine, and the clash is a known gotcha there.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mozbeacon -d telemetry_alerts"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: mozbeacon/Dockerfile
+      target: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEBUG: "1"
+      LOG_LEVEL: DEBUG
+      # Inside the compose network postgres is still on its own 5432; the 5433 mapping
+      # above is only for the host.
+      DATABASE_URL: psql://mozbeacon:mozbeacon@postgres:5432/telemetry_alerts
+      # Outbound stays off locally. Nothing here should ever reach Bugzilla or email.
+      TELEMETRY_ENABLE_BUGS: "0"
+      TELEMETRY_ENABLE_EMAILS: "0"
+    volumes:
+      # Live-editable source. The virtualenv lives at /opt/venv precisely so that this
+      # mount can't shadow it.
+      - ./mozbeacon:/app
+      # Keep a host-side `uv sync` venv out of the container.
+      - /app/.venv
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
