@@ -16,6 +16,21 @@ against, and which phase each piece belongs to.
 
 ## Local development
 
+`just` is the entry point. `just --list` shows everything, and the recipes work from
+anywhere in the repository:
+
+```bash
+just setup      # uv sync, plus the git hooks
+just start      # Postgres and the backend, in the background
+just migrate
+just test       # args pass through, so `just test -k label -x` works
+just api        # http://localhost:8000
+just ci         # everything CI needs to be green
+```
+
+Every recipe is the command CI runs rather than a convenience variant, so the local
+signal stays worth trusting. The raw commands are below for when you need them.
+
 Two ways to run, both against the same Postgres. Everything below is run from the
 repository root unless noted.
 
@@ -149,5 +164,5 @@ docker build -f mozbeacon/Dockerfile --target runtime -t mozbeacon:dev .
 `deploy/entrypoint-api.sh` (Cloud Run service), `deploy/entrypoint-worker.sh` (nightly
 Job) and `deploy/entrypoint-migrate.sh` (migration Job, never on service startup).
 
-A `justfile` replaces the commands above once the command surface stops moving. That
-is Phase 9, deliberately after cutover.
+`just build` builds the deployed image, and `just test-docker` runs the suite inside
+it.
