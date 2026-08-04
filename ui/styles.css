@@ -12,7 +12,8 @@ body {
 }
 
 .container {
-    max-width: 1400px;
+    /* Wide enough for the with-bugs view, which carries the most columns. */
+    max-width: 1600px;
     margin: 0 auto;
     padding: 20px;
 }
