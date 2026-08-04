@@ -1,5 +1,25 @@
 const API_URL = 'https://sql.telemetry.mozilla.org/api/queries/108351/results.json?api_key=cu3eqD40BhCbwPJ8KfQ7NHCueftTpnIvJcdRVo7a';
 
+// Friendlier display names for the metric types. Anything missing here falls back to the
+// type from the probe's definition.
+const PROBE_TYPE_LABELS = {
+    timing_distribution: 'Time',
+    memory_distribution: 'Memory',
+    custom_distribution: 'Custom',
+    labeled_timing_distribution: 'Time',
+    labeled_memory_distribution: 'Memory',
+    labeled_custom_distribution: 'Custom'
+};
+
+// Memory distributions report a memory_unit; the time equivalents go through
+// normalizeTimeUnit. Anything else is shown as the definition spells it.
+const MEMORY_UNIT_ABBREVIATIONS = {
+    byte: 'B',
+    kilobyte: 'KB',
+    megabyte: 'MB',
+    gigabyte: 'GB'
+};
+
 // Shared floating tooltip for the percentile labels below the chart.
 function getPercentileTooltip() {
     let el = document.getElementById('percentile-label-tooltip');
@@ -93,7 +113,7 @@ let currentFilters = {
     alertId: null
 };
 let maxProbeLength = 0;
-let probeMetadataCache = {}; // probe name -> Promise resolving to the metric dictionary entry (or null)
+let probeMetadataCache = {}; // "<app> <probe name>" -> Promise resolving to the probe definition (or null)
 let groupedSortColumn = 'detectionDate'; // 'summaryId', 'count', 'mostRecent', or 'detectionDate'
 let groupedSortDirection = 'desc'; // 'asc' or 'desc' for grouped view
 
@@ -115,6 +135,50 @@ async function fetchAlerts() {
         console.error('Error fetching alerts:', error);
         throw error;
     }
+}
+
+// Types without a friendly name are shown as the definition spells them.
+function getProbeTypeLabel(metadata) {
+    const type = metadata?.type || null;
+    return PROBE_TYPE_LABELS[type] || type;
+}
+
+// Timing distributions carry a time_unit, memory distributions a memory_unit, and the
+// remaining types either a plain unit or none at all.
+function getProbeUnit(metadata) {
+    if (metadata?.time_unit) {
+        return normalizeTimeUnit(metadata.time_unit);
+    }
+    if (metadata?.memory_unit) {
+        const unit = metadata.memory_unit.toLowerCase();
+        return MEMORY_UNIT_ABBREVIATIONS[unit] || unit;
+    }
+    return metadata?.unit || null;
+}
+
+// Both the type and the unit come from each probe's own definition. Only a couple dozen
+// distinct probes ever alert and fetchProbeMetadata caches, so this is a handful of requests.
+async function fetchProbeDefinitions(alerts) {
+    const definitions = {};
+    const probes = Array.from(new Set(
+        alerts.filter(alert => alert.probe).map(alert => `${alert.platform} ${alert.probe}`)
+    ));
+
+    await Promise.all(probes.map(async key => {
+        const [platform, probe] = key.split(' ');
+        definitions[key] = await fetchProbeMetadata(probe, platform);
+    }));
+
+    alerts.forEach(alert => {
+        const metadata = alert.probe ? definitions[`${alert.platform} ${alert.probe}`] : null;
+        alert.probeType = getProbeTypeLabel(metadata);
+        alert.probeUnit = getProbeUnit(metadata);
+    });
+}
+
+function formatProbeType(alert) {
+    if (!alert.probeType) return 'N/A';
+    return alert.probeUnit ? `${alert.probeType} (${alert.probeUnit})` : alert.probeType;
 }
 
 function hasCdfData(alert) {
@@ -355,16 +419,18 @@ function updateSortIndicators() {
                 'bug': 1,
                 'bugStatus': 2,
                 'probe': 3,
-                'platform': 4,
-                'pushDate': 5
+                'probeType': 4,
+                'platform': 5,
+                'pushDate': 6
             };
         } else {
             // Without bugs view has different column order
             columnMap = {
                 'alertId': 0,
                 'probe': 1,
-                'platform': 2,
-                'pushDate': 3
+                'probeType': 2,
+                'platform': 3,
+                'pushDate': 4
             };
         }
 
@@ -423,7 +489,7 @@ function createDetailsRow(alert, rowId) {
 
     return `
         <tr class="details-row" id="details-${rowId}">
-            <td colspan="7" class="details-cell">
+            <td colspan="8" class="details-cell">
                 <div class="root-cause-section">
                     <button class="root-cause-btn" id="root-cause-btn-${rowId}"
                             onclick="event.stopPropagation(); generateRootCauses('${rowId}')">Generate Potential Root Causes</button>
@@ -472,7 +538,7 @@ function createDetailsRow(alert, rowId) {
                         <div class="detail-label">Distribution (CDF)</div>
                         <div class="detail-value cdf-chart-wrapper" style="max-width: none;">
                             <div class="cdf-canvas-box" style="height: 408px;">
-                                <canvas id="chart-${rowId}" data-probe="${alert.probe || ''}"></canvas>
+                                <canvas id="chart-${rowId}" data-probe="${alert.probe || ''}" data-platform="${alert.platform || ''}"></canvas>
                             </div>
                         </div>
                     </div>
@@ -687,20 +753,32 @@ function setupChartBehavior(canvas, isTouchDevice, includePercentileToggle = fal
     }
 }
 
-// Fetch (and cache) a probe's entry from the Glean dictionary. The same entry carries
-// time_unit, monitor.lower_is_better and the Bugzilla component tag.
-function fetchProbeMetadata(probe) {
+// Fetch (and cache) a probe's definition from the Glean dictionary. The same entry carries
+// the type, its unit, monitor.lower_is_better and the Bugzilla component tag. Android alerts
+// are defined in Fenix and everything else in firefox_desktop; most probes exist in both, so
+// each app falls back to the other. These are the same apps the detector pulls from
+// (mozbeacon/detection/detector.py).
+function fetchProbeMetadata(probe, platform) {
     if (!probe) return Promise.resolve(null);
-    if (!probeMetadataCache[probe]) {
-        const url = `https://dictionary.telemetry.mozilla.org/data/firefox_desktop/metrics/data_${probe}.json`;
-        probeMetadataCache[probe] = fetch(url)
-            .then(response => (response.ok ? response.json() : null))
-            .catch(e => {
-                console.warn('Could not fetch probe metadata for', probe, e);
-                return null;
-            });
+    const apps = platform === 'Android' ? ['fenix', 'firefox_desktop'] : ['firefox_desktop', 'fenix'];
+    const cacheKey = `${apps[0]} ${probe}`;
+    if (!probeMetadataCache[cacheKey]) {
+        probeMetadataCache[cacheKey] = apps.reduce(
+            (chain, app) => chain.then(metadata => metadata || fetchProbeDefinition(app, probe)),
+            Promise.resolve(null)
+        );
     }
-    return probeMetadataCache[probe];
+    return probeMetadataCache[cacheKey];
+}
+
+function fetchProbeDefinition(app, probe) {
+    const url = `https://dictionary.telemetry.mozilla.org/data/${app}/metrics/data_${probe}.json`;
+    return fetch(url)
+        .then(response => (response.ok ? response.json() : null))
+        .catch(e => {
+            console.warn('Could not fetch probe metadata for', probe, 'from', app, e);
+            return null;
+        });
 }
 
 // The dictionary exposes the Bugzilla component as a tag named "Product :: Component".
@@ -717,8 +795,8 @@ async function populateBugzillaComponent(rowId) {
     if (!el || el.dataset.loaded) return;
     el.dataset.loaded = 'true';
 
-    const probe = alertsByRowId[rowId]?.probe;
-    const metadata = await fetchProbeMetadata(probe);
+    const alert = alertsByRowId[rowId];
+    const metadata = await fetchProbeMetadata(alert?.probe, alert?.platform);
     const component = getBugzillaComponent(metadata);
 
     if (!component) {
@@ -754,7 +832,7 @@ async function generateRootCauses(rowId) {
     results.innerHTML = '';
 
     try {
-        const metadata = await fetchProbeMetadata(alert?.probe);
+        const metadata = await fetchProbeMetadata(alert?.probe, alert?.platform);
         const result = await findPotentialRootCauses({
             repo: getAlertRepo(alert),
             fromRevision: alert?.oldestPush,
@@ -779,11 +857,10 @@ async function renderCDFChart(canvasId) {
     // Guard against duplicate calls while the fetch is in-flight
     canvas._chartInstance = 'pending';
 
-    const probe = canvas.dataset.probe;
     let timeUnit = 'ns';
     let lowerIsBetter = null;
 
-    const metadata = await fetchProbeMetadata(probe);
+    const metadata = await fetchProbeMetadata(canvas.dataset.probe, canvas.dataset.platform);
     if (metadata) {
         if (metadata.time_unit) {
             timeUnit = normalizeTimeUnit(metadata.time_unit);
@@ -1134,6 +1211,7 @@ function getRowHTMLWithBug(alert, rowId, bugStatusClass) {
         </td>
         <td><span class="badge ${bugStatusClass}">${alert.bugStatus}</span></td>
         <td class="probe-cell">${probeContent}</td>
+        <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
     `;
@@ -1157,6 +1235,7 @@ function getRowHTMLWithoutBug(alert, rowId) {
         </td>
         <td>${alertIdContent}</td>
         <td class="probe-cell">${probeContent}</td>
+        <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
     `;
@@ -1284,6 +1363,7 @@ function renderGroupedAlerts(alerts) {
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Bug</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Bug Status</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Probe</th>
+                    <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Unit</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Platform</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Push Date</th>
                 </tr>
@@ -1321,6 +1401,7 @@ function renderGroupedAlerts(alerts) {
                         <span class="badge ${bugStatusClass}">${alert.bugStatus || 'N/A'}</span>
                     </td>
                     <td style="padding: 8px 12px;" class="probe-cell">${probeContent}</td>
+                    <td style="padding: 8px 12px;">${formatProbeType(alert)}</td>
                     <td style="padding: 8px 12px;">${alert.platform}</td>
                     <td style="padding: 8px 12px;">${formatDate(alert.pushDate)}</td>
                 </tr>
@@ -1404,6 +1485,7 @@ function updateTableHeaders() {
             <th class="sortable" onclick="sortByColumn('bug')">Bug</th>
             <th class="sortable" onclick="sortByColumn('bugStatus')">Bug Status</th>
             <th class="sortable" onclick="sortByColumn('probe')">Probe</th>
+            <th class="sortable" onclick="sortByColumn('probeType')">Unit</th>
             <th class="sortable" onclick="sortByColumn('platform')">Platform</th>
             <th class="sortable" onclick="sortByColumn('pushDate')">Push Date</th>
         `;
@@ -1415,6 +1497,7 @@ function updateTableHeaders() {
             <th></th>
             <th class="sortable" onclick="sortByColumn('alertId')">Alert ID</th>
             <th class="sortable" onclick="sortByColumn('probe')">Probe</th>
+            <th class="sortable" onclick="sortByColumn('probeType')">Unit</th>
             <th class="sortable" onclick="sortByColumn('platform')">Platform</th>
             <th class="sortable" onclick="sortByColumn('pushDate')">Push Date</th>
         `;
@@ -1757,6 +1840,7 @@ async function init() {
 
         const data = await fetchAlerts();
         allAlerts = parseData(data);
+        await fetchProbeDefinitions(allAlerts);
         calculateMaxProbeLength();
 
         loadingEl.style.display = 'none';
