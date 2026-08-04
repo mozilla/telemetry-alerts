@@ -1,7 +1,6 @@
 # telemetry-alerts
 
-This repository contains the Mozilla telemetry alerting system. The detection system is
-found in [MozDetect](https://github.com/mozilla/mozdetect).
+This repository contains the Mozilla telemetry alerting system. The detection system is found in [MozDetect](https://github.com/mozilla/mozdetect).
 
 | Path | What it is |
 | :--- | :--- |
