@@ -708,6 +708,11 @@ html.dark .probe-info:hover {
     color: #388e3c;
 }
 
+.badge.mixed {
+    background-color: #fff3e0;
+    color: #f57c00;
+}
+
 .badge.unknown {
     background-color: #eeeeee;
     color: #666;
@@ -1073,6 +1078,11 @@ html.dark .badge.regression {
 html.dark .badge.improvement {
     background-color: #1a3020;
     color: #66bb6a;
+}
+
+html.dark .badge.mixed {
+    background-color: #3a2a10;
+    color: #ffb74d;
 }
 
 html.dark .badge.unknown {

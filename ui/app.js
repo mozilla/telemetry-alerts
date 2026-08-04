@@ -187,14 +187,16 @@ function formatProbeType(alert) {
     return alert.probeUnit ? `${alert.probeType} (${alert.probeUnit})` : alert.probeType;
 }
 
-// The query's Direction is the alert's is_regression flag: true is a regression, false an
-// improvement, and null a probe whose direction couldn't be determined. The labels double as
-// the values of the direction filter.
-const DIRECTION_LABELS = ['Regression', 'Improvement', 'Unknown'];
+// The query's Direction is the alert's is_regression flag: true is a regression and false an
+// improvement. When it's null the change went both ways ("Mixed") if the probe's
+// lower_is_better is known, and is otherwise undetermined. The labels double as the values of
+// the direction filter.
+const DIRECTION_LABELS = ['Regression', 'Improvement', 'Mixed', 'Unknown'];
 
 function getDirectionLabel(alert) {
     if (alert.direction === true) return 'Regression';
     if (alert.direction === false) return 'Improvement';
+    if (alert.lowerIsBetter !== null && alert.lowerIsBetter !== undefined) return 'Mixed';
     return 'Unknown';
 }
 
@@ -258,6 +260,7 @@ function parseData(data) {
         oldestPush: row['Oldest Push'],
         additionalData: row['Extra Data'],
         direction: row['Direction'],
+        lowerIsBetter: row['Lower Is Better'],
     }));
 
     return alerts;
