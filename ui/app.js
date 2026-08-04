@@ -156,8 +156,8 @@ function getProbeUnit(metadata) {
     return metadata?.unit || null;
 }
 
-// Both the type and the unit come from each probe's own definition. Only a couple dozen
-// distinct probes ever alert and fetchProbeMetadata caches, so this is a handful of requests.
+// Both the type/unit and the description come from each probe's own definition. Only a couple
+// dozen distinct probes ever alert and fetchProbeMetadata caches, so this is a few requests.
 async function fetchProbeDefinitions(alerts) {
     const definitions = {};
     const probes = Array.from(new Set(
@@ -173,12 +173,41 @@ async function fetchProbeDefinitions(alerts) {
         const metadata = alert.probe ? definitions[`${alert.platform} ${alert.probe}`] : null;
         alert.probeType = getProbeTypeLabel(metadata);
         alert.probeUnit = getProbeUnit(metadata);
+        // Descriptions often continue past the first line with boilerplate about the Legacy
+        // Telemetry probe they were generated from, so only the first line is kept.
+        alert.probeDescription = metadata?.description
+            ? metadata.description.trim().split('\n')[0].trim() || null
+            : null;
     });
 }
 
 function formatProbeType(alert) {
     if (!alert.probeType) return 'N/A';
     return alert.probeUnit ? `${alert.probeType} (${alert.probeUnit})` : alert.probeType;
+}
+
+function escapeAttribute(value) {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+// The probe name links out to GLAM, with its description on an info icon right beside the
+// name. The padding trails both so the column stays aligned (.probe-cell is monospace with
+// white-space: pre).
+function getProbeCellHTML(alert) {
+    if (!alert.probe) return padProbe(null);
+
+    const glamUrl = `https://glam.telemetry.mozilla.org/fog/probe/${encodeURIComponent(alert.probe)}` +
+        `/explore?os=${encodeURIComponent(alert.platform)}&normalizationType=non_normalized`;
+    const padding = ' '.repeat(maxProbeLength - alert.probe.length);
+    const description = alert.probeDescription
+        ? `<span class="probe-info" title="${escapeAttribute(alert.probeDescription)}" onclick="event.stopPropagation()">&#9432;</span>`
+        : '';
+
+    return `<a href="${glamUrl}" target="_blank" class="bug-link" onclick="event.stopPropagation()">${alert.probe}</a>${description}${padding}`;
 }
 
 function hasCdfData(alert) {
@@ -1185,13 +1214,6 @@ async function renderCDFChart(canvasId) {
 }
 
 function getRowHTMLWithBug(alert, rowId, bugStatusClass) {
-    const probeContent = alert.probe
-        ? `<a href="https://glam.telemetry.mozilla.org/fog/probe/${encodeURIComponent(alert.probe)}/explore?os=${encodeURIComponent(alert.platform)}&normalizationType=non_normalized"
-              target="_blank"
-              class="bug-link"
-              onclick="event.stopPropagation()">${alert.probe}</a>${' '.repeat(maxProbeLength - alert.probe.length)}`
-        : padProbe(null);
-
     const alertIdContent = currentFilters.alertId === null
         ? `<a href="#" class="bug-link" onclick="event.stopPropagation(); applyAlertIdFilter(${alert.alertId}); return false;">${alert.alertId}</a>`
         : alert.alertId;
@@ -1210,7 +1232,7 @@ function getRowHTMLWithBug(alert, rowId, bugStatusClass) {
             </a>
         </td>
         <td><span class="badge ${bugStatusClass}">${alert.bugStatus}</span></td>
-        <td class="probe-cell">${probeContent}</td>
+        <td class="probe-cell">${getProbeCellHTML(alert)}</td>
         <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
@@ -1218,13 +1240,6 @@ function getRowHTMLWithBug(alert, rowId, bugStatusClass) {
 }
 
 function getRowHTMLWithoutBug(alert, rowId) {
-    const probeContent = alert.probe
-        ? `<a href="https://glam.telemetry.mozilla.org/fog/probe/${encodeURIComponent(alert.probe)}/explore?os=${encodeURIComponent(alert.platform)}&normalizationType=non_normalized"
-              target="_blank"
-              class="bug-link"
-              onclick="event.stopPropagation()">${alert.probe}</a>${' '.repeat(maxProbeLength - alert.probe.length)}`
-        : padProbe(null);
-
     const alertIdContent = currentFilters.alertId === null
         ? `<a href="#" class="bug-link" onclick="event.stopPropagation(); applyAlertIdFilter(${alert.alertId}); return false;">${alert.alertId}</a>`
         : alert.alertId;
@@ -1234,7 +1249,7 @@ function getRowHTMLWithoutBug(alert, rowId) {
             <button class="expand-btn" id="expand-${rowId}">▶</button>
         </td>
         <td>${alertIdContent}</td>
-        <td class="probe-cell">${probeContent}</td>
+        <td class="probe-cell">${getProbeCellHTML(alert)}</td>
         <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
@@ -1376,13 +1391,6 @@ function renderGroupedAlerts(alerts) {
             const nestedRowId = `${groupRowId}-alert-${alertIndex}`;
             alertsByRowId[nestedRowId] = alert;
             const bugStatusClass = getBugStatusClass(alert.bugStatus);
-            const probeContent = alert.probe
-                ? `<a href="https://glam.telemetry.mozilla.org/fog/probe/${encodeURIComponent(alert.probe)}/explore?os=${encodeURIComponent(alert.platform)}&normalizationType=non_normalized"
-                      target="_blank"
-                      class="bug-link"
-                      onclick="event.stopPropagation()">${alert.probe}</a>${' '.repeat(maxProbeLength - alert.probe.length)}`
-                : padProbe(null);
-
             const nestedAlertIdContent = currentFilters.alertId === null
                 ? `<a href="#" class="bug-link" onclick="event.stopPropagation(); applyAlertIdFilter(${alert.alertId}); return false;">${alert.alertId}</a>`
                 : alert.alertId;
@@ -1400,7 +1408,7 @@ function renderGroupedAlerts(alerts) {
                     <td style="padding: 8px 12px;">
                         <span class="badge ${bugStatusClass}">${alert.bugStatus || 'N/A'}</span>
                     </td>
-                    <td style="padding: 8px 12px;" class="probe-cell">${probeContent}</td>
+                    <td style="padding: 8px 12px;" class="probe-cell">${getProbeCellHTML(alert)}</td>
                     <td style="padding: 8px 12px;">${formatProbeType(alert)}</td>
                     <td style="padding: 8px 12px;">${alert.platform}</td>
                     <td style="padding: 8px 12px;">${formatDate(alert.pushDate)}</td>

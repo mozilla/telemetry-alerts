@@ -510,6 +510,26 @@ tbody td.probe-cell {
     white-space: pre;
 }
 
+/* Info icon carrying the probe's description as a native tooltip. */
+.probe-info {
+    color: #667eea;
+    cursor: help;
+    font-size: 1rem;
+    margin-left: 6px;
+}
+
+.probe-info:hover {
+    color: #4a5bd0;
+}
+
+html.dark .probe-info {
+    color: #8b9ff5;
+}
+
+html.dark .probe-info:hover {
+    color: #b0bef8;
+}
+
 .expand-btn {
     background: none;
     border: none;
