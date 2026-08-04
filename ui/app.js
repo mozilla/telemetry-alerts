@@ -105,6 +105,7 @@ let currentSort = {
 };
 let currentFilters = {
     platforms: new Set(),
+    directions: new Set(), // any of DIRECTION_LABELS
     probeSearchTerms: [],
     groupedWithBugsOnly: false,
     dateFrom: null,
@@ -187,7 +188,10 @@ function formatProbeType(alert) {
 }
 
 // The query's Direction is the alert's is_regression flag: true is a regression, false an
-// improvement, and null a probe whose direction couldn't be determined.
+// improvement, and null a probe whose direction couldn't be determined. The labels double as
+// the values of the direction filter.
+const DIRECTION_LABELS = ['Regression', 'Improvement', 'Unknown'];
+
 function getDirectionLabel(alert) {
     if (alert.direction === true) return 'Regression';
     if (alert.direction === false) return 'Improvement';
@@ -309,6 +313,11 @@ function getFilteredAlerts() {
     // Apply platform filter
     if (currentFilters.platforms.size > 0) {
         filtered = filtered.filter(alert => currentFilters.platforms.has(alert.platform));
+    }
+
+    // Apply direction filter
+    if (currentFilters.directions.size > 0) {
+        filtered = filtered.filter(alert => currentFilters.directions.has(getDirectionLabel(alert)));
     }
 
     // Apply probe filter (text search with space-separated terms)
@@ -1552,6 +1561,13 @@ function updateURLParameter() {
         url.searchParams.delete('platforms');
     }
 
+    // Update directions parameter
+    if (currentFilters.directions.size > 0) {
+        url.searchParams.set('directions', Array.from(currentFilters.directions).join(','));
+    } else {
+        url.searchParams.delete('directions');
+    }
+
     // Update probe search terms parameter
     if (currentFilters.probeSearchTerms.length > 0) {
         url.searchParams.set('probe', currentFilters.probeSearchTerms.join(' '));
@@ -1612,6 +1628,14 @@ function getFiltersFromURL() {
     const platformsParam = urlParams.get('platforms');
     if (platformsParam) {
         currentFilters.platforms = new Set(platformsParam.split(','));
+    }
+
+    // Get directions, ignoring anything that isn't one of the labels shown in the column
+    const directionsParam = urlParams.get('directions');
+    if (directionsParam) {
+        currentFilters.directions = new Set(
+            directionsParam.split(',').filter(value => DIRECTION_LABELS.includes(value))
+        );
     }
 
     // Get probe search terms
@@ -1704,11 +1728,14 @@ function setupFilters() {
     const platforms = getUniqueValues('platform');
 
     populateFilter('platform', platforms);
+    populateFilter('direction', DIRECTION_LABELS);
 
-    // Setup dropdown toggle for platform
-    document.getElementById('platform-header').addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleDropdown('platform');
+    // Setup dropdown toggles for the multi-selects
+    ['platform', 'direction'].forEach(type => {
+        document.getElementById(`${type}-header`).addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleDropdown(type);
+        });
     });
 
     // Setup probe text filter
@@ -1741,6 +1768,7 @@ function setupFilters() {
     // Clear filters button
     document.getElementById('clear-filters').addEventListener('click', () => {
         currentFilters.platforms.clear();
+        currentFilters.directions.clear();
         currentFilters.probeSearchTerms = [];
         currentFilters.groupedWithBugsOnly = false;
         currentFilters.dateFrom = null;
@@ -1821,24 +1849,29 @@ function closeAllDropdowns() {
 }
 
 function updateFilterDisplay() {
-    // Update platform header
-    const platformHeader = document.getElementById('platform-header').querySelector('span');
-    if (currentFilters.platforms.size === 0) {
-        platformHeader.textContent = 'All Platforms';
-    } else if (currentFilters.platforms.size === 1) {
-        platformHeader.textContent = Array.from(currentFilters.platforms)[0];
-    } else {
-        platformHeader.textContent = `${currentFilters.platforms.size} selected`;
-    }
+    // Update the multi-select headers
+    updateMultiSelectHeader('platform', currentFilters.platforms, 'All Platforms');
+    updateMultiSelectHeader('direction', currentFilters.directions, 'All Directions');
 
-    // Update checkboxes (only for platform now)
+    // Update checkboxes
     document.querySelectorAll('.filter-option input[type="checkbox"]').forEach(checkbox => {
         const type = checkbox.id.split('-')[0];
-        const value = checkbox.value;
-        if (type === 'platform') {
-            checkbox.checked = currentFilters.platforms.has(value);
+        const selected = currentFilters[`${type}s`];
+        if (selected) {
+            checkbox.checked = selected.has(checkbox.value);
         }
     });
+}
+
+function updateMultiSelectHeader(type, selected, allLabel) {
+    const header = document.getElementById(`${type}-header`).querySelector('span');
+    if (selected.size === 0) {
+        header.textContent = allLabel;
+    } else if (selected.size === 1) {
+        header.textContent = Array.from(selected)[0];
+    } else {
+        header.textContent = `${selected.size} selected`;
+    }
 }
 
 async function init() {
