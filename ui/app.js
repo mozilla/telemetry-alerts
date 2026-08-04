@@ -186,6 +186,19 @@ function formatProbeType(alert) {
     return alert.probeUnit ? `${alert.probeType} (${alert.probeUnit})` : alert.probeType;
 }
 
+// The query's Direction is the alert's is_regression flag: true is a regression, false an
+// improvement, and null a probe whose direction couldn't be determined.
+function getDirectionLabel(alert) {
+    if (alert.direction === true) return 'Regression';
+    if (alert.direction === false) return 'Improvement';
+    return 'Unknown';
+}
+
+function formatDirection(alert) {
+    const label = getDirectionLabel(alert);
+    return `<span class="badge ${label.toLowerCase()}">${label}</span>`;
+}
+
 function escapeAttribute(value) {
     return value
         .replace(/&/g, '&amp;')
@@ -240,6 +253,7 @@ function parseData(data) {
         newestPush: row['Newest Push'],
         oldestPush: row['Oldest Push'],
         additionalData: row['Extra Data'],
+        direction: row['Direction'],
     }));
 
     return alerts;
@@ -368,6 +382,13 @@ function sortAlerts(alerts, column, direction) {
             bVal = new Date(bVal);
         }
 
+        // Sort the direction by the label that's shown rather than the raw boolean. Alerts
+        // with no direction are null and were already pushed to the end above.
+        if (column === 'direction') {
+            aVal = getDirectionLabel(a);
+            bVal = getDirectionLabel(b);
+        }
+
         // Handle numbers
         if (column === 'alertId' || column === 'alertSummaryId' || column === 'bug') {
             aVal = Number(aVal);
@@ -448,18 +469,20 @@ function updateSortIndicators() {
                 'bug': 1,
                 'bugStatus': 2,
                 'probe': 3,
-                'probeType': 4,
-                'platform': 5,
-                'pushDate': 6
+                'direction': 4,
+                'probeType': 5,
+                'platform': 6,
+                'pushDate': 7
             };
         } else {
             // Without bugs view has different column order
             columnMap = {
                 'alertId': 0,
                 'probe': 1,
-                'probeType': 2,
-                'platform': 3,
-                'pushDate': 4
+                'direction': 2,
+                'probeType': 3,
+                'platform': 4,
+                'pushDate': 5
             };
         }
 
@@ -518,7 +541,7 @@ function createDetailsRow(alert, rowId) {
 
     return `
         <tr class="details-row" id="details-${rowId}">
-            <td colspan="8" class="details-cell">
+            <td colspan="9" class="details-cell">
                 <div class="root-cause-section">
                     <button class="root-cause-btn" id="root-cause-btn-${rowId}"
                             onclick="event.stopPropagation(); generateRootCauses('${rowId}')">Generate Potential Root Causes</button>
@@ -537,11 +560,6 @@ function createDetailsRow(alert, rowId) {
                         <div class="detail-label">Bugzilla Component</div>
                         <div id="bugzilla-${rowId}" class="detail-value">Loading…</div>
                     </div>
-                    ${hasCdfData(alert) ? `
-                    <div class="detail-item" style="grid-row: 1;">
-                        <div class="detail-label">Status</div>
-                        <div id="status-${rowId}" class="detail-value">Unknown</div>
-                    </div>` : ''}
                     <div class="detail-item" style="grid-row: 2;">
                         <div class="detail-label">Detection Push</div>
                         <div class="detail-value">${detectionPushLink}</div>
@@ -887,16 +905,10 @@ async function renderCDFChart(canvasId) {
     canvas._chartInstance = 'pending';
 
     let timeUnit = 'ns';
-    let lowerIsBetter = null;
 
     const metadata = await fetchProbeMetadata(canvas.dataset.probe, canvas.dataset.platform);
-    if (metadata) {
-        if (metadata.time_unit) {
-            timeUnit = normalizeTimeUnit(metadata.time_unit);
-        }
-        if (metadata.monitor && typeof metadata.monitor === 'object' && 'lower_is_better' in metadata.monitor) {
-            lowerIsBetter = metadata.monitor.lower_is_better;
-        }
+    if (metadata?.time_unit) {
+        timeUnit = normalizeTimeUnit(metadata.time_unit);
     }
 
     // Row may have been collapsed while fetching — bail out cleanly
@@ -1119,21 +1131,6 @@ async function renderCDFChart(canvasId) {
     // Build diff points: after CDF minus before CDF at each bin
     const diffPoints = beforePoints.map((pt, i) => ({ x: pt.x, y: afterPoints[i].y - pt.y }));
 
-    const statusEl = document.getElementById(`status-${rowId}`);
-    if (statusEl) {
-        const diffSum = diffPoints.reduce((sum, pt) => sum + pt.y, 0);
-        const isRegression = lowerIsBetter === null
-            ? null
-            : (diffSum < 0 && lowerIsBetter) || (diffSum >= 0 && !lowerIsBetter);
-        if (isRegression === null) {
-            statusEl.textContent = 'Unknown';
-            statusEl.className = 'detail-value';
-        } else {
-            statusEl.textContent = isRegression ? 'Regression' : 'Improvement';
-            statusEl.className = `detail-value cdf-status ${isRegression ? 'cdf-regression' : 'cdf-improvement'}`;
-        }
-    }
-
     const diffCanvas = document.getElementById('diff-' + canvasId);
     if (diffCanvas) {
         diffCanvas._chartInstance = new Chart(diffCanvas, {
@@ -1233,6 +1230,7 @@ function getRowHTMLWithBug(alert, rowId, bugStatusClass) {
         </td>
         <td><span class="badge ${bugStatusClass}">${alert.bugStatus}</span></td>
         <td class="probe-cell">${getProbeCellHTML(alert)}</td>
+        <td>${formatDirection(alert)}</td>
         <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
@@ -1250,6 +1248,7 @@ function getRowHTMLWithoutBug(alert, rowId) {
         </td>
         <td>${alertIdContent}</td>
         <td class="probe-cell">${getProbeCellHTML(alert)}</td>
+        <td>${formatDirection(alert)}</td>
         <td>${formatProbeType(alert)}</td>
         <td>${alert.platform}</td>
         <td>${formatDate(alert.pushDate)}</td>
@@ -1378,6 +1377,7 @@ function renderGroupedAlerts(alerts) {
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Bug</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Bug Status</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Probe</th>
+                    <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Direction</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Unit</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Platform</th>
                     <th style="padding: 12px; text-align: left; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; cursor: default;">Push Date</th>
@@ -1409,6 +1409,7 @@ function renderGroupedAlerts(alerts) {
                         <span class="badge ${bugStatusClass}">${alert.bugStatus || 'N/A'}</span>
                     </td>
                     <td style="padding: 8px 12px;" class="probe-cell">${getProbeCellHTML(alert)}</td>
+                    <td style="padding: 8px 12px;">${formatDirection(alert)}</td>
                     <td style="padding: 8px 12px;">${formatProbeType(alert)}</td>
                     <td style="padding: 8px 12px;">${alert.platform}</td>
                     <td style="padding: 8px 12px;">${formatDate(alert.pushDate)}</td>
@@ -1493,6 +1494,7 @@ function updateTableHeaders() {
             <th class="sortable" onclick="sortByColumn('bug')">Bug</th>
             <th class="sortable" onclick="sortByColumn('bugStatus')">Bug Status</th>
             <th class="sortable" onclick="sortByColumn('probe')">Probe</th>
+            <th class="sortable" onclick="sortByColumn('direction')">Direction</th>
             <th class="sortable" onclick="sortByColumn('probeType')">Unit</th>
             <th class="sortable" onclick="sortByColumn('platform')">Platform</th>
             <th class="sortable" onclick="sortByColumn('pushDate')">Push Date</th>
@@ -1505,6 +1507,7 @@ function updateTableHeaders() {
             <th></th>
             <th class="sortable" onclick="sortByColumn('alertId')">Alert ID</th>
             <th class="sortable" onclick="sortByColumn('probe')">Probe</th>
+            <th class="sortable" onclick="sortByColumn('direction')">Direction</th>
             <th class="sortable" onclick="sortByColumn('probeType')">Unit</th>
             <th class="sortable" onclick="sortByColumn('platform')">Platform</th>
             <th class="sortable" onclick="sortByColumn('pushDate')">Push Date</th>
