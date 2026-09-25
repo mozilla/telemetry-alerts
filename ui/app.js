@@ -1069,15 +1069,15 @@ async function renderCDFChart(canvasId) {
 
     setupChartBehavior(currentCanvas, isTouchDevice, true);
 
-    // Compute percentiles and add vertical line annotations for median, p5, p75, p95 on CDF chart.
+    // Compute percentiles and add vertical line annotations for p50, p5, p75, p95 on CDF chart.
     // Both before and after share the same bin array (before.bin serves both).
     if (beforePoints.length > 0 && afterPoints.length > 0) {
-        const medianBeforePct = percentileFromCdf(beforeCdf, bins, 0.5);
+        const p50BeforePct = percentileFromCdf(beforeCdf, bins, 0.5);
         const p5BeforePct     = percentileFromCdf(beforeCdf, bins, 0.05);
         const p75BeforePct    = percentileFromCdf(beforeCdf, bins, 0.75);
         const p95BeforePct    = percentileFromCdf(beforeCdf, bins, 0.95);
 
-        const medianAfterPct  = percentileFromCdf(afterCdf, bins, 0.5);
+        const p50AfterPct  = percentileFromCdf(afterCdf, bins, 0.5);
         const p5AfterPct      = percentileFromCdf(afterCdf, bins, 0.05);
         const p75AfterPct     = percentileFromCdf(afterCdf, bins, 0.75);
         const p95AfterPct     = percentileFromCdf(afterCdf, bins, 0.95);
@@ -1107,13 +1107,13 @@ async function renderCDFChart(canvasId) {
         }
 
         // Before (blue #4a7eff) vertical lines at each percentile
-        addAnn('medianBefore', toX(medianBeforePct), '#4a7eff', 'B-Median', 1);
+        addAnn('p50Before', toX(p50BeforePct), '#4a7eff', 'B-p50', 1);
         addAnn('p5Before',     toX(p5BeforePct),     '#4a7eff', 'B-p5',     1);
         addAnn('p75Before',    toX(p75BeforePct),    '#4a7eff', 'B-p75',    1);
         addAnn('p95Before',    toX(p95BeforePct),    '#4a7eff', 'B-p95',    1);
 
         // After (orange #ff6b4a) vertical lines at each percentile
-        addAnn('medianAfter',  toX(medianAfterPct),  '#ff6b4a', 'A-Median', 0);
+        addAnn('p50After',  toX(p50AfterPct),  '#ff6b4a', 'A-p50', 0);
         addAnn('p5After',      toX(p5AfterPct),       '#ff6b4a', 'A-p5',     0);
         addAnn('p75After',     toX(p75AfterPct),      '#ff6b4a', 'A-p75',    0);
         addAnn('p95After',     toX(p95AfterPct),      '#ff6b4a', 'A-p95',    0);
